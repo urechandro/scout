@@ -1,0 +1,8 @@
+# Index database (per-project, not committed)
+.scout/
+
+# Built binaries
+/bin/
+
+# macOS
+.DS_Store

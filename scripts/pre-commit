@@ -1,0 +1,26 @@
+#!/bin/sh
+# .git/hooks/pre-commit
+# Incrementally reindexes any staged .go files before each commit.
+# Install: cp scripts/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+
+CHANGED=$(git diff --cached --name-only --diff-filter=ACM | grep '\.go$' | tr '\n' ',')
+
+if [ -z "$CHANGED" ]; then
+  exit 0
+fi
+
+DB="${SCOUT_DB:-.scout/index.db}"
+
+if [ ! -f "$DB" ]; then
+  exit 0
+fi
+
+echo "scout: reindexing changed files..."
+
+indexer --db "$DB" --dir "$(pwd)" --files "$CHANGED"
+
+if [ $? -ne 0 ]; then
+  echo "scout: reindex failed (non-fatal, continuing commit)"
+fi
+
+exit 0
