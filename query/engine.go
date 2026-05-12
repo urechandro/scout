@@ -81,9 +81,9 @@ func (e *Engine) GetRelevantContext(req ContextRequest) (*ContextResponse, error
 				break
 			}
 		}
-		// Boost server implementations — methods in svc/server/service packages
-		// are what the model usually wants to read and edit.
+		// Boost server implementations; penalise proto-generated boilerplate.
 		score += implBoost(sym)
+		score += generatedPenalty(sym)
 		s := toSummary(sym, score, "semantic match")
 		scored[sym.ID] = &s
 	}
@@ -449,6 +449,7 @@ func (e *Engine) GetConventions(topic string) (*ConventionResult, error) {
 	for i, sym := range hits {
 		s := float64(len(hits)-i) / float64(len(hits))
 		s += implBoost(sym)
+		s += generatedPenalty(sym)
 		items = append(items, scored{sym: sym, score: s})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].score > items[j].score })
@@ -765,6 +766,17 @@ func implBoost(sym store.Symbol) float64 {
 	// Smaller boost for any method (over types/interfaces/protos).
 	if sym.Kind == "method" {
 		return 0.2
+	}
+	return 0
+}
+
+// generatedPenalty returns a score penalty for proto-generated files (.pb.go,
+// .pb.gw.go). These are indexed for proto-go linking but should rank below
+// hand-written code in get_relevant_context results — they are boilerplate
+// the model rarely needs to read directly.
+func generatedPenalty(sym store.Symbol) float64 {
+	if strings.HasSuffix(sym.File, ".pb.go") || strings.HasSuffix(sym.File, ".pb.gw.go") {
+		return -0.6
 	}
 	return 0
 }
