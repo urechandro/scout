@@ -176,7 +176,7 @@ func findModuleDirs(root string) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() && strings.HasPrefix(d.Name(), ".") {
+		if d.IsDir() && path != root && strings.HasPrefix(d.Name(), ".") {
 			return filepath.SkipDir
 		}
 		if !d.IsDir() && d.Name() == "go.mod" {

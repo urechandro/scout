@@ -483,6 +483,15 @@ func isGeneratedPackage(pkg *packages.Package) bool {
 // Proto-generated files (.pb.go, .pb.gw.go) are NOT excluded — they define
 // the gRPC service interfaces needed to link proto RPCs to Go implementations.
 func isGeneratedFile(path string) bool {
+	base := filepath.Base(path)
+
+	// Proto-generated files are always kept — they define gRPC service interfaces
+	// needed to link proto RPCs to Go implementations. Check before directory
+	// scan so that files under proto/gen/ are not skipped.
+	if strings.HasSuffix(base, ".pb.go") || strings.HasSuffix(base, ".pb.gw.go") {
+		return false
+	}
+
 	// Check directory components.
 	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
 		if strings.HasPrefix(part, ".") {
@@ -494,19 +503,13 @@ func isGeneratedFile(path string) bool {
 		}
 	}
 
-	// Check filename suffixes — but keep .pb.go and .pb.gw.go because they
-	// contain gRPC service interfaces that bridge proto→Go implementations.
-	base := filepath.Base(path)
+	// Check filename suffixes.
 	if strings.HasSuffix(base, "_gen.go") ||
 		strings.HasSuffix(base, "_generated.go") {
 		return true
 	}
 
 	// Check for "Code generated" comment in first 5 lines.
-	// Skip this check for .pb.go files — we want their signatures indexed.
-	if strings.HasSuffix(base, ".pb.go") || strings.HasSuffix(base, ".pb.gw.go") {
-		return false
-	}
 	f, err := os.Open(path)
 	if err != nil {
 		return false
