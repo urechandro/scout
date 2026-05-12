@@ -1,6 +1,9 @@
 # Index database (per-project, not committed)
 .scout/
 
+# Claude Code settings (project-specific paths, not committed)
+.claude/
+
 # Built binaries
 /bin/
 

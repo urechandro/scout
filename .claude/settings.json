@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "scout": {
-      "command": "server",
-      "args": ["--db", "/your/project/.scout/index.db"]
-    }
-  }
-}
