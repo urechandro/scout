@@ -52,6 +52,7 @@ your codebase (.go + .proto files)
 | `get_body(symbol_id)` | Full source of one symbol. Call only when about to read or edit it. |
 | `get_callers(symbol_id)` | Everything that calls this symbol. Call before changing a function signature. |
 | `get_callees(symbol_id)` | Everything this symbol depends on. |
+| `get_conventions(topic)` | Look up a documented architectural pattern by topic (e.g. "pagination", "auth", "event handler"). Returns the pattern description, pseudocode structure, and example symbols. Falls back to FTS symbol search if no documented convention matches. |
 
 ## Design Decisions
 
@@ -80,8 +81,10 @@ scout/
 │   ├── indexer/main.go     — CLI: run full or incremental index
 │   └── server/main.go      — CLI: run MCP server over stdio
 ├── indexer/
-│   └── indexer.go          — Parses Go packages via go/packages, extracts
-│                             symbols and call edges, writes to store
+│   ├── indexer.go          — Parses Go packages via go/packages, extracts
+│   │                         symbols and call edges, writes to store
+│   └── conventions.go      — Reads conventions.yaml from the indexed project,
+│                             upserts entries into the conventions table
 ├── protoindexer/
 │   └── indexer.go          — Parses .proto files, extracts services, RPCs,
 │                             messages, and enums, writes to store
@@ -110,6 +113,12 @@ scout/
   large codebases where some packages may fail to resolve
 - Incremental mode: `RunFiles([]string)` deletes stale symbols for given files
   then re-parses only affected packages
+
+### indexer/conventions.go
+- Looks for `conventions.yaml` or `conventions.yml` in the indexed project root
+- If absent, silently skips (conventions are optional)
+- Parses YAML into `conventionYAML` structs and upserts each into the `conventions` table
+- Called automatically by the indexer after Go and proto indexing
 
 ### protoindexer/indexer.go
 - Walks the configured directory for `.proto` files
@@ -149,11 +158,6 @@ tools that think in tasks — multi-layer, spanning proto → generated Go → s
 implementation → tests in a single query. Prioritised next steps:
 
 ### High value
-- **Curated pattern registry** — a YAML file in the indexed project where the
-  team documents architectural/programming patterns explicitly (name, description,
-  example symbol IDs). `get_conventions` would look here first before falling
-  back to FTS. Lets the tool answer "how do we implement a mutator/saga/handler
-  in this codebase" without relying on FTS to infer patterns it can't detect.
 - **`get_unimplemented(service)`** — diff proto service definition against Go
   server struct, return which RPCs are missing or stubbed. Gap-filling tasks
   need to know what doesn't exist yet before they can add it.
@@ -208,6 +212,32 @@ SELECT COUNT(*) FROM edges;
 datasette /your/project/.scout/index.db --host 0.0.0.0 --port 8001
 ```
 Then open http://localhost:8001.
+
+### Document conventions (optional)
+
+Copy the example file into your project root and fill it in:
+
+```sh
+cp /path/to/scout/conventions.example.yaml /your/project/conventions.yaml
+```
+
+Each entry documents one architectural pattern:
+
+```yaml
+- name: my-pattern          # unique slug
+  terms:                    # search terms that trigger this convention
+    - pattern name
+    - related keywords
+  description: |            # what the pattern is and WHY it exists
+    ...
+  structure: |              # pseudocode showing the repeating shape
+    ...
+  examples:                 # symbol IDs (suffix is fine, fuzzy-matched)
+    - pkg.TypeName.MethodName
+```
+
+The indexer loads `conventions.yaml` automatically on every run. Claude calls
+`get_conventions("topic")` to retrieve the pattern before implementing it.
 
 ### Wire up Claude Code
 Add to `.claude/settings.json` in your project root. Claude Code picks it up automatically.
