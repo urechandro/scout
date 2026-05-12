@@ -41,7 +41,7 @@ func (idx *Indexer) Run() error {
 		}
 		if d.IsDir() {
 			name := d.Name()
-			if strings.HasPrefix(name, ".") || name == "vendor" {
+			if path != idx.cfg.Dir && (strings.HasPrefix(name, ".") || name == "vendor") {
 				return filepath.SkipDir
 			}
 			return nil
