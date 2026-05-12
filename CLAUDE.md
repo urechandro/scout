@@ -28,9 +28,9 @@ to orient, fetches full source only when it's about to act.
 ## Architecture
 
 ```
-your codebase (.go files)
-        ↓  go/packages (type-checked AST)
-    indexer
+your codebase (.go + .proto files)
+        ↓  go/packages (type-checked AST) + proto parser
+    indexer + protoindexer
         ↓  upsert
     store (SQLite)
       ├── symbols table (id, kind, signature, docstring, file, lines, body)
@@ -68,9 +68,9 @@ semantic gap cases — the query engine is designed with this seam in mind.
 over stdio. All the logic lives in the indexer and query engine as plain Go
 packages. The server just wires them together.
 
-**Docker/Podman container.** The indexer needs a full Go toolchain at runtime
-because `go/packages` shells out to `go list` to resolve types. The final
-image uses `golang:1.26-alpine3.23` for both build and runtime stages.
+**Go install, no container.** The indexer and server are installed as plain Go
+binaries via `go install`. The target machine needs Go available because
+`go/packages` shells out to `go list` to resolve types.
 
 ## File Structure
 
@@ -82,6 +82,9 @@ scout/
 ├── indexer/
 │   └── indexer.go          — Parses Go packages via go/packages, extracts
 │                             symbols and call edges, writes to store
+├── protoindexer/
+│   └── indexer.go          — Parses .proto files, extracts services, RPCs,
+│                             messages, and enums, writes to store
 ├── store/
 │   └── store.go            — SQLite schema + CRUD: symbols, FTS, edges
 ├── query/
@@ -91,9 +94,7 @@ scout/
 ├── scripts/
 │   └── pre-commit          — Git hook for incremental reindex on commit
 ├── .claude/
-│   └── settings.json       — Wires MCP server into Claude Code via podman
-├── Dockerfile              — Multi-stage build, golang:1.26-alpine3.23
-├── docker-compose.yml      — Convenience for running indexer (podman-compose)
+│   └── settings.json       — Wires MCP server into Claude Code
 └── go.mod                  — module github.com/urechandro/scout
 ```
 
@@ -109,6 +110,12 @@ scout/
   large codebases where some packages may fail to resolve
 - Incremental mode: `RunFiles([]string)` deletes stale symbols for given files
   then re-parses only affected packages
+
+### protoindexer/indexer.go
+- Walks the configured directory for `.proto` files
+- Extracts services, RPCs, messages, and enums as symbols
+- Uses a line-by-line parser (no protoc dependency)
+- Supports `ExcludePaths` to skip generated or vendor directories
 
 ### store/store.go
 - `symbols` table: primary store, keyed by fully-qualified symbol ID
@@ -157,8 +164,7 @@ implementation → tests in a single query. Prioritised next steps:
 
 ### Housekeeping
 - Build a `scout` CLI (Go, `cmd/cli`) to replace `scripts/reindex.sh`.
-  Subcommands: `index`, `browse`, `rebuild`. Flags: `--dir`, `--exclude`,
-  `--volume`, `--image`.
+  Subcommands: `index`, `browse`, `rebuild`. Flags: `--dir`, `--exclude`.
 - No tests yet.
 - Pre-commit hook not tested end-to-end.
 - `.claude/settings.json` has placeholder path — needs real project path.
@@ -172,28 +178,26 @@ modernc.org/sqlite v1.30.0   — pure Go SQLite driver (CGO_ENABLED=1 for perf)
 
 ## Running It
 
-### Build
+### Install
 ```sh
-podman build -t scout:latest .
+go install github.com/urechandro/scout/cmd/indexer@latest
+go install github.com/urechandro/scout/cmd/server@latest
 ```
 
 ### Full index
 ```sh
-podman volume create scout-index
-podman run --rm \
-  -v /your/project:/workspace:ro \
-  -v $(go env GOPATH)/pkg/mod:/go/pkg/mod:ro \
-  -v scout-index:/data \
-  --entrypoint /app/indexer \
-  scout:latest \
-  --db /data/index.db --dir /workspace
+indexer --db /your/project/.scout/index.db --dir /your/project
+```
+
+### Incremental reindex
+```sh
+indexer --db /your/project/.scout/index.db --dir /your/project \
+  --files path/to/changed.go,other.go
 ```
 
 ### Inspect the index
 ```sh
-podman run --rm -it -v scout-index:/data alpine:3.23 sh
-apk add sqlite
-sqlite3 /data/index.db
+sqlite3 /your/project/.scout/index.db
 SELECT COUNT(*) FROM symbols;
 SELECT id, kind, signature FROM symbols LIMIT 20;
 SELECT COUNT(*) FROM edges;
@@ -201,42 +205,22 @@ SELECT COUNT(*) FROM edges;
 
 ### Browse the index (Datasette)
 ```sh
-podman run --rm -it \
-  -v scout-index:/data:ro \
-  -p 8001:8001 \
-  datasetteproject/datasette \
-  datasette /data/index.db --host 0.0.0.0 --port 8001
+datasette /your/project/.scout/index.db --host 0.0.0.0 --port 8001
 ```
 Then open http://localhost:8001.
 
 ### Wire up Claude Code
-Edit `.claude/settings.json` with your real project path, place it in your
-project root. Claude Code picks it up automatically.
+Add to `.claude/settings.json` in your project root. Claude Code picks it up automatically.
 
 ```json
 {
   "mcpServers": {
-    "codebase-nav": {
-      "command": "podman",
-      "args": [
-        "run", "--rm", "-i",
-        "-v", "/your/project:/workspace:ro",
-        "-v", "scout-index:/data",
-        "scout:latest"
-      ]
+    "scout": {
+      "command": "server",
+      "args": ["--db", "/your/project/.scout/index.db"]
     }
   }
 }
 ```
 
-### Incremental reindex
-```sh
-podman run --rm \
-  -v /your/project:/workspace:ro \
-  -v $(go env GOPATH)/pkg/mod:/go/pkg/mod:ro \
-  -v scout-index:/data \
-  --entrypoint /app/indexer \
-  scout:latest \
-  --db /data/index.db --dir /workspace \
-  --files path/to/changed.go,other.go
-```
+If `server` is not on your `$PATH`, use the full path (e.g. `~/go/bin/server`).
