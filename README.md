@@ -18,13 +18,13 @@ go install github.com/urechandro/scout/cmd/server@latest
 ### 1. Index your codebase
 
 ```sh
-indexer --db /your/project/.scout/index.db --dir /your/project
+indexer --db /your/project/.scout/index.db --root /your/project
 ```
 
 For incremental reindex (e.g. from a pre-commit hook):
 
 ```sh
-indexer --db /your/project/.scout/index.db --dir /your/project \
+indexer --db /your/project/.scout/index.db --root /your/project \
   --files path/to/changed.go,other.go
 ```
 

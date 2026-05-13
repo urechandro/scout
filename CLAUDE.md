@@ -190,12 +190,12 @@ go install github.com/urechandro/scout/cmd/server@latest
 
 ### Full index
 ```sh
-indexer --db /your/project/.scout/index.db --dir /your/project
+indexer --db /your/project/.scout/index.db --root /your/project
 ```
 
 ### Incremental reindex
 ```sh
-indexer --db /your/project/.scout/index.db --dir /your/project \
+indexer --db /your/project/.scout/index.db --root /your/project \
   --files path/to/changed.go,other.go
 ```
 
