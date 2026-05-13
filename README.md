@@ -66,7 +66,10 @@ SELECT COUNT(*) FROM edges;
 
 | Tool | Purpose |
 |---|---|
-| `get_relevant_context(task)` | Primary tool. FTS search + graph expansion + ranking. Returns symbol summaries within a token budget. |
+| `get_relevant_context(query)` | Primary tool. FTS search + graph expansion + ranking. Returns symbol summaries within a token budget. |
 | `get_body(symbol_id)` | Full source of one symbol. Call only when about to read or edit it. |
 | `get_callers(symbol_id)` | Everything that calls this symbol. Useful before changing a signature. |
 | `get_callees(symbol_id)` | Everything this symbol depends on. |
+| `get_flow(symbol_id)` | Full source of a symbol plus caller/callee summaries in one call. Use instead of separate get_body + get_callers + get_callees. |
+| `get_pattern(task)` | A complete vertical slice (proto RPC → messages → Go implementation) as a concrete example to follow before implementing something new. |
+| `get_conventions(topic)` | How a cross-cutting pattern is used across the codebase (e.g. "pagination", "error handling", "outbox"). |
