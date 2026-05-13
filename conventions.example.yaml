@@ -1,181 +1,71 @@
-# conventions.yaml — Curated pattern registry for scout
+# conventions.example.yaml — Example pattern registry for scout
 #
-# Place this file at the root of the indexed project. The indexer reads it
-# and loads conventions into the database so get_conventions can return
-# documented patterns with concrete examples.
+# Copy this file to conventions.yaml at the root of your indexed project.
+# The indexer reads it and loads conventions into the database so
+# get_conventions can return documented patterns with concrete examples.
 #
 # Fields:
 #   name:        Unique slug for the pattern
 #   terms:       Search terms that should trigger this convention
 #   description: What the pattern is and WHY it exists
 #   structure:   Pseudocode showing the repeating shape
-#   examples:    Symbol IDs (suffix is fine — fuzzy-matched at query time)
+#   examples:    Symbol IDs from your codebase (suffix is fine — fuzzy-matched)
 
-- name: transactional-outbox
+- name: repository-pattern
   terms:
-    - outbox
-    - event dispatch
-    - flush outbox
-    - domain events
-    - reliable messaging
+    - repository
+    - data access
+    - persistence
+    - database
+    - store
   description: |
-    All mutations publish domain events via AddToOutbox() INSIDE the database
-    transaction. FlushOutbox() is always deferred BEFORE the transaction starts.
-    This guarantees that events are only published if the transaction commits,
-    and that they are never lost (at-least-once delivery).
+    All database access goes through a Repository interface. Callers depend on
+    the interface, not the concrete implementation. This keeps business logic
+    testable without a real database and allows the storage backend to be
+    swapped independently.
   structure: |
-    defer s.outbox.FlushOutbox(ctx)
-    defer s.tuplesClient.FlushOutbox(ctx)
-    err = s.repository.RunInTransaction(ctx, func(ctx context.Context, tx repository.Transaction) error {
-        resource, err := tx.Insert(ctx, resource)
-        if err != nil { return err }
-        if err = s.outbox.AddToOutbox(ctx, tx.Tx(), resource); err != nil { return err }
-        if err = s.tuplesClient.Planning.Create*(ctx, tx.Tx(), name, org); err != nil { return err }
-        return nil
-    })
+    type Repository interface {
+        FindByID(ctx context.Context, id string) (*Entity, error)
+        Insert(ctx context.Context, e *Entity) (*Entity, error)
+        Update(ctx context.Context, e *Entity) (*Entity, error)
+        Delete(ctx context.Context, id string) error
+        List(ctx context.Context, params ListParams) ([]*Entity, error)
+    }
+
+    // Implementation lives in a separate package and is injected at startup.
+    type sqlRepository struct{ db *sql.DB }
+    func (r *sqlRepository) FindByID(ctx context.Context, id string) (*Entity, error) { ... }
   examples:
-    - drivershiftsvc.Server.CreateDriverShift
-    - transportordersvc.Server.CreateTransportOrder
-    - geofenceeventhandler.Handler.Handle
+    - yourpkg.Repository
+    - yourpkg.NewSQLRepository
 
 - name: grpc-handler
   terms:
     - rpc
     - handler
     - service method
-    - server method
     - grpc
     - endpoint
   description: |
-    All RPC methods follow a consistent structure:
-    1. Validate required fields (fieldbehavior.ValidateRequiredFields)
-    2. Parse resource names from request (UnmarshalString)
-    3. Defer outbox flushes
-    4. Execute business logic inside RunInTransaction
-    5. Return result
+    All gRPC methods follow a consistent structure:
+    1. Validate required fields
+    2. Parse resource names from the request
+    3. Execute business logic (inside a transaction where writes are involved)
+    4. Return the result proto
   structure: |
-    func (s *Server) CreateResource(ctx context.Context, request *pb.CreateResourceRequest) (*pb.Resource, error) {
-        if err := fieldbehavior.ValidateRequiredFields(request); err != nil {
+    func (s *Server) CreateResource(ctx context.Context, req *pb.CreateResourceRequest) (*pb.Resource, error) {
+        if err := validate(req); err != nil {
             return nil, status.Errorf(codes.InvalidArgument, "invalid request: %v", err)
         }
-        var orgName pb.OrganizationResourceName
-        if err := orgName.UnmarshalString(request.GetParent()); err != nil {
-            return nil, status.Errorf(codes.InvalidArgument, "invalid request: %v", err)
+        result, err := s.repo.Insert(ctx, toModel(req.GetResource()))
+        if err != nil {
+            return nil, status.Errorf(codes.Internal, "insert: %v", err)
         }
-        defer s.outbox.FlushOutbox(ctx)
-        var result *pb.Resource
-        err = s.repository.RunInTransaction(ctx, func(ctx context.Context, tx repository.Transaction) error {
-            result, err = tx.Insert(ctx, request.GetResource())
-            if err != nil { return err }
-            return s.outbox.AddToOutbox(ctx, tx.Tx(), result)
-        })
-        return result, err
+        return toProto(result), nil
     }
   examples:
-    - activitysvc.Server.CreateActivity
-    - drivershiftsvc.Server.CreateDriverShift
-    - vehiclestateoverridesvc.Server.CreateVehicleStateOverride
-
-- name: state-propagation
-  terms:
-    - state machine
-    - state propagation
-    - cascade
-    - state changes
-    - activity state
-  description: |
-    Domain events (e.g. activity state changes) trigger cascading state updates
-    across related entities. State computation is separated from persistence:
-    a StateChanges struct collects all mutations, then Apply() persists them
-    in a single operation. This avoids partial updates.
-  structure: |
-    changes, err := statemachine.OnActivityStateChanged(ctx, reader, activity)
-    // changes contains maps of entities to create/update/delete
-    result, err := statemachine.Apply(ctx, writer, changes)
-    // result contains persisted entities — emit events for each
-    for _, dispatch := range result.Dispatches {
-        s.dispatchOutbox.AddToOutbox(ctx, tx.Tx(), dispatch)
-    }
-  examples:
-    - statemachine.OnActivityStateChanged
-    - statemachine.Apply
-
-- name: validation-pipeline
-  terms:
-    - validation
-    - validate
-    - validator
-    - required fields
-    - proto validation
-  description: |
-    Validation is modularized into composable validators applied in sequence.
-    Each validator is a ProtoValidationFn[T]. The Validate() helper runs them
-    sequentially and short-circuits on the first error. This keeps validation
-    logic out of the main RPC handler.
-  structure: |
-    validators := []validation.ProtoValidationFn[*pb.CreateActivityRequest]{
-        validation.RequiredFieldsValidation[*pb.CreateActivityRequest](),
-        validation.ProtoValidation[*pb.CreateActivityRequest](s.protoValidator),
-        validation.ParentOrganizationValidation[*pb.CreateActivityRequest](false),
-        customValidator,
-    }
-    return validation.Validate(ctx, validators, request)
-  examples:
-    - activitysvc.validateCreateActivityRequest
-    - transportordersvc.validateCreateTransportOrderRequest
-
-- name: error-handling
-  terms:
-    - error handling
-    - status code
-    - business abort
-    - grpc error
-    - error wrapping
-  description: |
-    Errors use gRPC status codes consistently:
-    - InvalidArgument for input validation
-    - NotFound for missing resources
-    - Aborted for optimistic concurrency (etag mismatch)
-    Inside transactions, use repository.BusinessAbort() instead of
-    status.Errorf(codes.Aborted) to prevent the Spanner driver from
-    retrying business logic errors.
-  structure: |
-    // Input validation
-    return nil, status.Errorf(codes.InvalidArgument, "invalid request: %v", err)
-    // Not found
-    return nil, status.Errorf(codes.NotFound, "resource not found")
-    // Business abort inside transaction (no Spanner retry)
-    return repository.BusinessAbort("etag mismatch")
-    // Transient errors (retryable)
-    return nil, cloudrunner.WrapTransient(err, "external service failed")
-  examples:
-    - repository.BusinessAbort
-    - repository.RunInTransaction
-
-- name: authz
-  terms:
-    - authorization
-    - authz
-    - auth
-    - tuples
-    - permissions
-    - access control
-  description: |
-    Authorization uses tuple-based access control. For reads,
-    authz.ParamsFromContext() extracts the caller's permissions and scopes
-    queries. For mutations, tuplesClient creates/deletes tuples inside the
-    transaction to grant or revoke access.
-  structure: |
-    // Reads: extract authz params and pass to repository
-    authzParams, err := authz.ParamsFromContext(ctx, s.authzClient, parent)
-    resources, err = tx.ListResources(ctx, params, &authzParams)
-
-    // Mutations: create tuples inside transaction
-    err = s.tuplesClient.Planning.CreateResourceOrganization(ctx, tx.Tx(), name, org)
-  examples:
-    - authz.ParamsFromContext
-    - drivershiftsvc.Server.CreateDriverShift
-    - poolchangehandler.Handler.Handle
+    - yourpkg.Server.CreateResource
+    - yourpkg.Server.GetResource
 
 - name: pagination
   terms:
@@ -183,26 +73,56 @@
     - page token
     - page size
     - list
-    - aip
+    - cursor
   description: |
-    Pagination follows AIP conventions. ParsePaginationOpts validates page_size
-    (default 100, max 1000), decodes page_token to an offset. NextPageToken
-    encodes the next offset if more results exist.
+    List RPCs use cursor-based pagination. ParsePaginationOpts validates
+    page_size (default 50, max 500) and decodes the page token into an offset.
+    NextPageToken encodes the next cursor only when more results exist.
   structure: |
-    pagination, err := aip.ParsePaginationOpts(req)
-    resources, hasMore, err = tx.ListResources(ctx, crudhelpers.ListParams{
-        Limit:  pagination.PageSize,
-        Offset: pagination.Offset,
-    }, parent)
-    nextPageToken, err := pagination.NextPageToken(hasMore)
-    return &pb.ListResourcesResponse{
-        Resources:     resources,
-        NextPageToken: nextPageToken,
+    opts, err := pagination.Parse(req.GetPageSize(), req.GetPageToken())
+    if err != nil {
+        return nil, status.Errorf(codes.InvalidArgument, "invalid page token: %v", err)
+    }
+    items, hasMore, err := s.repo.List(ctx, ListParams{
+        Limit:  opts.PageSize,
+        Cursor: opts.Cursor,
+    })
+    return &pb.ListResponse{
+        Items:         toProtos(items),
+        NextPageToken: pagination.NextToken(hasMore, items),
     }, nil
   examples:
-    - aip.ParsePaginationOpts
-    - transportordersvc.Server.ListTransportOrders
-    - activitysvc.Server.ListActivities
+    - yourpkg.Server.ListResources
+
+- name: error-handling
+  terms:
+    - error handling
+    - status code
+    - grpc error
+    - error wrapping
+    - sentinel error
+  description: |
+    Errors are mapped to gRPC status codes at the boundary (the handler).
+    Internal packages return plain Go errors or typed sentinel errors.
+    Handlers convert them to status.Errorf calls. This keeps domain code free
+    of gRPC imports and makes error intent explicit at the call site.
+  structure: |
+    // Domain package: plain errors
+    var ErrNotFound = errors.New("not found")
+    var ErrConflict = errors.New("conflict")
+
+    // Handler: map to status codes
+    switch {
+    case errors.Is(err, repo.ErrNotFound):
+        return nil, status.Errorf(codes.NotFound, "resource not found")
+    case errors.Is(err, repo.ErrConflict):
+        return nil, status.Errorf(codes.AlreadyExists, "resource already exists")
+    default:
+        return nil, status.Errorf(codes.Internal, "unexpected error: %v", err)
+    }
+  examples:
+    - yourpkg.ErrNotFound
+    - yourpkg.Server.CreateResource
 
 - name: testing
   terms:
@@ -210,109 +130,31 @@
     - testing
     - fixture
     - integration test
-    - emulator
+    - table driven
   description: |
-    Integration tests use a shared fixture that initializes Spanner emulator,
-    PubSub, all services, and mocks. Tests call t.Parallel() and use
-    t.Context(). Outbox mocks track emitted events for assertions.
+    Tests are table-driven, call t.Parallel(), and use t.Context(). Integration
+    tests share a fixture that brings up real dependencies (database, external
+    services) once per package via TestMain, then run subtests in parallel.
   structure: |
-    func Test_CreateResource(t *testing.T) {
+    func TestCreateResource(t *testing.T) {
         t.Parallel()
-        ctx := t.Context()
-        emulatorFx := spantest.NewEmulatorFixture(t)
-        fx := newIntegrationTestFixture(t, emulatorFx)
-        resource, err := fx.server.CreateResource(ctx, request)
-        assert.NilError(t, err)
-        events := fx.outbox.Events()
-        assert.Equal(t, len(events), 1)
-    }
-  examples:
-    - activitysvc.TestCreateActivity
-    - drivershiftsvc.TestCreateDriverShift
-
-- name: transactions
-  terms:
-    - transaction
-    - db transaction
-    - run in transaction
-    - spanner
-    - read only
-  description: |
-    All mutations use RunInTransaction() which handles Spanner abort/retry.
-    Read-only operations use RunInReadOnlyTransaction(). Inside a transaction,
-    tx.Tx() exposes the underlying *sql.Tx for libraries (outbox, tuples)
-    that need it. Use BusinessAbort() to prevent retry on business errors.
-  structure: |
-    // Mutation
-    err = s.repository.RunInTransaction(ctx, func(ctx context.Context, tx repository.Transaction) error {
-        resource, err := tx.InsertResource(ctx, resource)
-        if duplicate { return repository.BusinessAbort("already exists") }
-        return s.outbox.AddToOutbox(ctx, tx.Tx(), resource)
-    })
-    // Read-only
-    err = s.repository.RunInReadOnlyTransaction(ctx, func(ctx context.Context, tx repository.Transaction) error {
-        resources, err = tx.ListResources(ctx, params)
-        return err
-    })
-  examples:
-    - repository.RunInTransaction
-    - repository.RunInReadOnlyTransaction
-    - drivershiftsvc.Server.GetDriverShift
-
-- name: event-handler
-  terms:
-    - event handler
-    - pubsub
-    - async handler
-    - message handler
-    - subscriber
-  description: |
-    Async handlers receive events from Pub/Sub, deserialize them, and process
-    inside a transaction with their own outboxes. Same transactional outbox
-    pattern as RPC handlers. Events flow:
-    Pub/Sub -> Handler -> Transaction -> Outbox -> next Pub/Sub topic.
-  structure: |
-    func (h *Handler) Handle(ctx context.Context, msg *pubsubpb.PubsubMessage) error {
-        var event pb.SomeEvent
-        if err := proto.Unmarshal(msg.GetData(), &event); err != nil {
-            return fmt.Errorf("unmarshal: %w", err)
+        tests := []struct {
+            name    string
+            req     *pb.CreateResourceRequest
+            wantErr codes.Code
+        }{
+            {name: "ok", req: validReq(), wantErr: codes.OK},
+            {name: "missing name", req: &pb.CreateResourceRequest{}, wantErr: codes.InvalidArgument},
         }
-        defer h.outbox.FlushOutbox(ctx)
-        defer h.tuples.FlushOutbox(ctx)
-        return h.repository.RunInTransaction(ctx, func(ctx context.Context, tx repository.Transaction) error {
-            resource, err := tx.CreateFromEvent(ctx, &event)
-            if err != nil { return err }
-            return h.outbox.AddToOutbox(ctx, tx.Tx(), resource)
-        })
+        for _, tc := range tests {
+            t.Run(tc.name, func(t *testing.T) {
+                t.Parallel()
+                ctx := t.Context()
+                fx := newFixture(t)
+                _, err := fx.server.CreateResource(ctx, tc.req)
+                assert.Equal(t, status.Code(err), tc.wantErr)
+            })
+        }
     }
   examples:
-    - geofenceeventhandler.Handler.Handle
-    - poolchangehandler.Handler.Handle
-
-- name: mutation-result
-  terms:
-    - mutation result
-    - batch mutation
-    - mutation
-    - mutate
-  description: |
-    Complex mutations (activity create/update/delete) collect changes in a
-    MutationResult struct with maps of entities to create, update, and delete.
-    Pre-update state is captured for diffing. This separates computing
-    mutations from applying them.
-  structure: |
-    result := &MutationResult{
-        ActivitiesToCreate:  make(map[string]*Activity),
-        ActivitiesToUpdate:  make(map[string]*Activity),
-        ActivitiesToDelete:  make(map[string]*Activity),
-        PreUpdateActivities: make(map[string]*Activity),
-    }
-    // ... compute mutations ...
-    // Apply all at once
-    for _, a := range result.ActivitiesToCreate {
-        tx.InsertActivity(ctx, a)
-        s.outbox.AddToOutbox(ctx, tx.Tx(), a)
-    }
-  examples:
-    - activitysvc.MutationResult
-    - vehiclestateoverridesvc.MutationResult
+    - yourpkg.TestCreateResource
