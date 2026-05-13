@@ -169,7 +169,7 @@ Returns at most budget_tokens worth of summaries. Each result includes a symbol_
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"task": map[string]any{
+					"query": map[string]any{
 						"type":        "string",
 						"description": "What you are trying to do. Use Go symbol names when known, domain terms when exploring. Examples: 'ValidateToken auth middleware', 'how are shipments created', 'rate limiting'.",
 					},
@@ -182,7 +182,7 @@ Returns at most budget_tokens worth of summaries. Each result includes a symbol_
 						"description": "How many hops to walk the call graph from FTS hits. Default 1. Use 2 if the first call missed implementations (e.g. found the interface but not the server method). Max 3.",
 					},
 				},
-				"required": []string{"task"},
+				"required": []string{"query"},
 			},
 		},
 		{
@@ -444,15 +444,15 @@ func (s *Server) handleToolsCall(req request) *response {
 
 func (s *Server) callGetRelevantContext(args json.RawMessage) (any, error) {
 	var params struct {
-		Task         string `json:"task"`
+		Query        string `json:"query"`
 		BudgetTokens int    `json:"budget_tokens"`
 		MaxDepth     int    `json:"max_depth"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return nil, fmt.Errorf("invalid arguments: %w", err)
 	}
-	if params.Task == "" {
-		return nil, fmt.Errorf("task is required")
+	if params.Query == "" {
+		return nil, fmt.Errorf("query is required")
 	}
 
 	depth := params.MaxDepth
@@ -464,7 +464,7 @@ func (s *Server) callGetRelevantContext(args json.RawMessage) (any, error) {
 	}
 
 	return s.engine.GetRelevantContext(query.ContextRequest{
-		Task:              params.Task,
+		Task:              params.Query,
 		BudgetTokens:      params.BudgetTokens,
 		MaxExpansionDepth: depth,
 	})
