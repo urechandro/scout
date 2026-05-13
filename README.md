@@ -62,6 +62,20 @@ SELECT id, kind, signature FROM symbols LIMIT 20;
 SELECT COUNT(*) FROM edges;
 ```
 
+### 4. Document conventions (optional)
+
+`get_conventions` returns documented architectural patterns when a
+`conventions.yaml` exists at your project root. Copy the example file and fill
+it in:
+
+```sh
+cp conventions.example.yaml /your/project/conventions.yaml
+```
+
+Each entry documents one pattern — name, search terms, description, pseudocode
+structure, and example symbol IDs. The indexer loads it automatically on every
+run.
+
 ## Tools exposed to Claude Code
 
 | Tool | Purpose |
