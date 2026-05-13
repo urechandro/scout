@@ -159,7 +159,9 @@ func (s *Server) handleToolsList(req request) *response {
 			"name": "get_relevant_context",
 			"description": `Orient yourself before acting. Returns symbol signatures, docstrings, and file locations — NOT full source.
 
-Workflow: call this FIRST for any task. Read the returned summaries to identify which symbols matter, then call get_body only on the 1-2 symbols you will actually edit.
+Workflow: call this ONCE at the start of any task. Read the returned summaries to identify which symbols matter, then call get_body only on the 1-2 symbols you will actually edit. Do NOT call it multiple times with overlapping queries.
+
+If the result is empty or does not contain what you expected: accept that the symbol does not exist yet. Do NOT fall back to Glob, Read, or file search to verify — an empty result is the answer.
 
 Use specific Go names when you know them ("ValidateToken", "ShipmentService"). Use domain terms when exploring ("rate limiting", "auth middleware"). The search matches against symbol names, signatures, and docstrings.
 
@@ -349,8 +351,9 @@ more token-efficient than reading files directly.
 ## The right flow for any task
 
 1. **get_relevant_context once** — orient, confirm what exists, find the closest
-   reference. Do not call it twice with overlapping intent. An empty result means
-   the symbol does not exist — do not verify with Glob or Read.
+   reference. Do not call it again with a rephrased query hoping for different results.
+   **Empty result = the symbol does not exist. Stop. Do not verify with Glob, Read,
+   or any file search. An empty result IS the answer.**
 2. **get_conventions** — before implementing any pattern (RPC handler, event handler,
    pagination, auth, outbox, transactions). Do not guess at patterns.
 3. **get_body on the specific symbols you are about to use as a template or edit**
