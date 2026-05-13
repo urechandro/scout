@@ -333,6 +333,8 @@ func (s *Store) FuzzyGetSymbol(query string) (*Symbol, []Symbol, error) {
 	}
 
 	// 3. Name match — extract the last component and search by name.
+	// Fetch more candidates so we can pick the best one when multiple
+	// symbols share the same name (common with generated vs hand-written code).
 	name := query
 	if idx := strings.LastIndex(query, "."); idx >= 0 {
 		name = query[idx+1:]
@@ -340,7 +342,7 @@ func (s *Store) FuzzyGetSymbol(query string) (*Symbol, []Symbol, error) {
 	rows, err = s.db.Query(`
 		SELECT id, package, name, kind, signature, docstring, file, line_start, line_end, body
 		FROM symbols WHERE name = ?
-		LIMIT 10
+		LIMIT 20
 	`, name)
 	if err != nil {
 		return nil, nil, fmt.Errorf("name search %q: %w", name, err)
@@ -354,10 +356,50 @@ func (s *Store) FuzzyGetSymbol(query string) (*Symbol, []Symbol, error) {
 		return &candidates[0], nil, nil
 	}
 	if len(candidates) > 1 {
-		return &candidates[0], candidates, nil
+		best := pickBestCandidate(candidates, query)
+		return best, candidates, nil
 	}
 
 	return nil, nil, ErrNotFound
+}
+
+// pickBestCandidate selects the most relevant symbol from a list of name-match
+// candidates. It prefers candidates whose package path shares the most overlap
+// with the original query string (the caller often provides a partially-qualified
+// ID), and penalises symbols from generated packages.
+func pickBestCandidate(candidates []Symbol, query string) *Symbol {
+	queryLower := strings.ToLower(query)
+	best := &candidates[0]
+	bestScore := -1.0
+
+	for i := range candidates {
+		c := &candidates[i]
+		score := 0.0
+
+		// Penalise generated packages — the caller almost never wants these.
+		pkgLower := strings.ToLower(c.Package)
+		if strings.Contains(pkgLower, "/gen/") || strings.Contains(pkgLower, "unimplemented") {
+			score -= 2.0
+		}
+
+		// Reward packages whose path appears verbatim in the query.
+		// Longer overlap = better match.
+		if strings.Contains(queryLower, pkgLower) {
+			score += float64(len(c.Package))
+		}
+
+		// Reward hand-written svc/server/service packages.
+		if strings.Contains(pkgLower, "svc") || strings.Contains(pkgLower, "server") || strings.Contains(pkgLower, "service") {
+			score += 1.0
+		}
+
+		if score > bestScore {
+			bestScore = score
+			best = c
+		}
+	}
+
+	return best
 }
 
 // GetCallersFromBody finds functions/methods whose stored body contains the
