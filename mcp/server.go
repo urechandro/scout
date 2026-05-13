@@ -18,6 +18,8 @@ const (
 	methodInitialize       = "initialize"
 	methodToolsList        = "tools/list"
 	methodToolsCall        = "tools/call"
+	methodPromptsList      = "prompts/list"
+	methodPromptsGet       = "prompts/get"
 	methodNotifInitialized = "notifications/initialized"
 )
 
@@ -123,6 +125,10 @@ func (s *Server) handle(req request) *response {
 		return s.handleToolsList(req)
 	case methodToolsCall:
 		return s.handleToolsCall(req)
+	case methodPromptsList:
+		return s.handlePromptsList(req)
+	case methodPromptsGet:
+		return s.handlePromptsGet(req)
 	default:
 		return &response{
 			JSONRPC: "2.0",
@@ -138,8 +144,11 @@ func (s *Server) handleInitialize(req request) *response {
 		ID:      req.ID,
 		Result: map[string]any{
 			"protocolVersion": "2024-11-05",
-			"capabilities":    map[string]any{"tools": map[string]any{}},
-			"serverInfo":      map[string]any{"name": "scout", "version": "0.1.0"},
+			"capabilities": map[string]any{
+				"tools":   map[string]any{},
+				"prompts": map[string]any{},
+			},
+			"serverInfo": map[string]any{"name": "scout", "version": "0.1.0"},
 		},
 	}
 }
@@ -288,6 +297,86 @@ Good for: "outbox", "pagination", "validation", "error handling", "saga", "middl
 		Result:  map[string]any{"tools": tools},
 	}
 }
+
+func (s *Server) handlePromptsList(req request) *response {
+	return &response{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+		Result: map[string]any{
+			"prompts": []map[string]any{
+				{
+					"name":        "usage",
+					"description": "How to use scout tools effectively — the right call sequence, what to avoid, and when to use each tool.",
+				},
+			},
+		},
+	}
+}
+
+func (s *Server) handlePromptsGet(req request) *response {
+	var params struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(req.Params, &params); err != nil || params.Name != "usage" {
+		return s.errResponse(req.ID, -32602, "unknown prompt")
+	}
+
+	return &response{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+		Result: map[string]any{
+			"description": "How to use scout tools effectively.",
+			"messages": []map[string]any{
+				{
+					"role": "user",
+					"content": map[string]any{
+						"type": "text",
+						"text": usagePrompt,
+					},
+				},
+			},
+		},
+	}
+}
+
+// usagePrompt is the system-level guidance injected into Claude Code via the
+// MCP prompts capability. It replaces the need for a CLAUDE.md section.
+const usagePrompt = `# Scout — codebase navigation
+
+Scout is connected. Use its tools to orient before acting. This is faster and
+more token-efficient than reading files directly.
+
+## The right flow for any task
+
+1. **get_relevant_context once** — orient, confirm what exists, find the closest
+   reference. Do not call it twice with overlapping intent. An empty result means
+   the symbol does not exist — do not verify with Glob or Read.
+2. **get_conventions** — before implementing any pattern (RPC handler, event handler,
+   pagination, auth, outbox, transactions). Do not guess at patterns.
+3. **get_body on the specific symbols you are about to use as a template or edit**
+   — and only those. Not for browsing.
+4. **Then act.**
+
+## Rules
+
+- Do not call get_relevant_context more than once per task unless the scope changes.
+- Do not use Read to open Go files. If you know a file path, derive the symbol ID
+  from context results and call get_body instead. Reading whole files defeats the index.
+- Proto files may be read with Read if they are not in the scout index.
+- Before changing a function signature, call get_callers to understand blast radius.
+
+## Tools
+
+| Tool | When |
+|---|---|
+| get_relevant_context(task) | Start of every task |
+| get_conventions(topic) | Before implementing any pattern |
+| get_body(symbol_id) | When about to read or edit a specific symbol |
+| get_callers(symbol_id) | Before changing a signature |
+| get_callees(symbol_id) | To understand what a symbol depends on |
+| get_flow(symbol_id) | To understand a symbol in context (body + callers + callees) |
+| get_pattern(task) | To get a full example slice (proto → messages → Go impl) |
+`
 
 func (s *Server) handleToolsCall(req request) *response {
 	var params toolCallParams
