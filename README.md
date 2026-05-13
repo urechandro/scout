@@ -71,5 +71,5 @@ SELECT COUNT(*) FROM edges;
 | `get_callers(symbol_id)` | Everything that calls this symbol. Useful before changing a signature. |
 | `get_callees(symbol_id)` | Everything this symbol depends on. |
 | `get_flow(symbol_id)` | Full source of a symbol plus caller/callee summaries in one call. Use instead of separate get_body + get_callers + get_callees. |
-| `get_pattern(task)` | A complete vertical slice (proto RPC → messages → Go implementation) as a concrete example to follow before implementing something new. |
+| `get_pattern(task)` | A complete vertical slice (proto RPC → request/response messages → Go implementation) with full source bodies. Requires proto indexing; degrades to a single FTS hit otherwise. Use before implementing a new RPC. |
 | `get_conventions(topic)` | How a cross-cutting pattern is used across the codebase (e.g. "pagination", "error handling", "outbox"). |
