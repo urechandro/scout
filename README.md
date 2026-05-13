@@ -21,6 +21,9 @@ go install github.com/urechandro/scout/cmd/server@latest
 indexer --db /your/project/.scout/index.db --root /your/project
 ```
 
+Proto files (`.proto`) are indexed automatically alongside Go. Use `--exclude`
+to skip generated or vendored proto directories.
+
 For incremental reindex (e.g. from a pre-commit hook):
 
 ```sh
