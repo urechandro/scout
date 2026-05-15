@@ -191,7 +191,24 @@ func (e *Engine) extractReferences(sym *store.Symbol) []SymbolSummary {
 		return nil
 	}
 
-	names := extractCallIdents(sym.Body)
+	callNames := extractCallIdents(sym.Body)
+	typeNames := extractTypeIdents(sym.Body)
+
+	nameSet := make(map[string]bool, len(callNames)+len(typeNames))
+	var names []string
+	for _, n := range callNames {
+		if !nameSet[n] {
+			nameSet[n] = true
+			names = append(names, n)
+		}
+	}
+	for _, n := range typeNames {
+		if !nameSet[n] {
+			nameSet[n] = true
+			names = append(names, n)
+		}
+	}
+
 	if len(names) == 0 {
 		return nil
 	}
@@ -204,7 +221,7 @@ func (e *Engine) extractReferences(sym *store.Symbol) []SymbolSummary {
 			continue
 		}
 		for _, s := range syms {
-			if seen[s.ID] {
+			if seen[s.ID] || isGenerated(s.File) {
 				continue
 			}
 			seen[s.ID] = true
@@ -216,6 +233,11 @@ func (e *Engine) extractReferences(sym *store.Symbol) []SymbolSummary {
 		refs = refs[:20]
 	}
 	return refs
+}
+
+func isGenerated(file string) bool {
+	return strings.HasSuffix(file, ".pb.go") || strings.HasSuffix(file, ".pb.gw.go") ||
+		strings.Contains(file, "/gen/")
 }
 
 // GetCallers returns summaries of all symbols that call the given symbol.
@@ -380,6 +402,75 @@ func extractCallIdents(body string) []string {
 	}
 
 	return names
+}
+
+// extractTypeIdents extracts exported PascalCase identifiers that appear as
+// type references (not call sites). Catches *TypeName, []TypeName, TypeName{},
+// and TypeName in signatures/declarations.
+func extractTypeIdents(body string) []string {
+	seen := map[string]bool{}
+	var names []string
+
+	for i := 0; i < len(body); i++ {
+		if !isUpperByte(body[i]) {
+			continue
+		}
+		// Check preceding char: must be a type-context trigger or start of line.
+		if i > 0 {
+			prev := body[i-1]
+			if isIdentChar(prev) {
+				continue
+			}
+		}
+		start := i
+		end := i
+		for end < len(body) && isIdentChar(body[end]) {
+			end++
+		}
+		name := body[start:end]
+		if len(name) < 3 || seen[name] {
+			i = end - 1
+			continue
+		}
+		// Skip Go keywords and common non-type identifiers.
+		if isGoKeyword(name) {
+			i = end - 1
+			continue
+		}
+		// Must look like a type name: at least one lowercase letter (filters ALL_CAPS constants).
+		hasLower := false
+		for _, c := range name {
+			if c >= 'a' && c <= 'z' {
+				hasLower = true
+				break
+			}
+		}
+		if !hasLower {
+			i = end - 1
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+		i = end - 1
+	}
+
+	return names
+}
+
+func isUpperByte(b byte) bool {
+	return b >= 'A' && b <= 'Z'
+}
+
+func isGoKeyword(s string) bool {
+	switch s {
+	case "Break", "Case", "Chan", "Const", "Continue", "Default", "Defer",
+		"Else", "Fallthrough", "For", "Func", "Go", "Goto", "If",
+		"Import", "Interface", "Map", "Package", "Range", "Return",
+		"Select", "Struct", "Switch", "Type", "Var",
+		"Context", "Server", "String", "Error":
+		return true
+	}
+	return false
 }
 
 func isIdentChar(b byte) bool {
