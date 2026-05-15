@@ -176,6 +176,15 @@ func (e *Engine) GetBody(symbolID string) (*BodyResponse, error) {
 		}
 	}
 
+	// Dep symbols have only a declaration line (LineStart == LineEnd).
+	// Read the full declaration from the module cache on demand.
+	if sym.LineStart == sym.LineEnd && sym.File != "" && sym.LineStart > 0 {
+		if body, end, err := readDecl(sym.File, sym.LineStart); err == nil {
+			sym.Body = body
+			sym.LineEnd = end
+		}
+	}
+
 	resp := &BodyResponse{Symbol: sym}
 
 	// If there were multiple candidates, include hints so the model can
@@ -1566,6 +1575,57 @@ func readLines(path string, start, end int) (string, error) {
 	}
 
 	return strings.Join(lines, "\n"), scanner.Err()
+}
+
+// readDecl reads a complete declaration (function, type, etc.) from a file
+// starting at the given line. Uses brace counting to find the end. Returns
+// the body text and the ending line number.
+func readDecl(path string, startLine int) (string, int, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", 0, err
+	}
+	defer f.Close()
+
+	var lines []string
+	depth := 0
+	hasOpenBrace := false
+	scanner := bufio.NewScanner(f)
+	for n := 1; scanner.Scan(); n++ {
+		if n < startLine {
+			continue
+		}
+		line := scanner.Text()
+		lines = append(lines, line)
+
+		for _, ch := range line {
+			if ch == '{' {
+				depth++
+				hasOpenBrace = true
+			} else if ch == '}' {
+				depth--
+			}
+		}
+
+		if hasOpenBrace && depth <= 0 {
+			return strings.Join(lines, "\n"), startLine + len(lines) - 1, scanner.Err()
+		}
+
+		// No braces on first line means it's a single-line declaration
+		// (const, var, type alias). Return as-is.
+		if len(lines) == 1 && !hasOpenBrace {
+			return lines[0], startLine, nil
+		}
+
+		if len(lines) > 200 {
+			break
+		}
+	}
+
+	if len(lines) == 0 {
+		return "", 0, fmt.Errorf("no lines read")
+	}
+	return strings.Join(lines, "\n"), startLine + len(lines) - 1, scanner.Err()
 }
 
 // isLineRef reports whether a stored body is a stale line reference from an old index.
