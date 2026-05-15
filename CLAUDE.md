@@ -192,8 +192,10 @@ scout/
 - Compound identifier utilities: `extractCompoundIdents`, `extractCompoundParts`,
   `isCompoundIdent`, `decomposeIdentifier`
 - `extractReferences`: called by `GetBody`, extracts identifiers from the symbol's
-  body via `extractCallIdents`, looks them up in the symbol table, returns up to
-  20 summaries. Skips self. Lets the agent see dependencies inline without extra calls
+  body via `extractCallIdents` (call sites) and `extractTypeIdents` (PascalCase
+  type names), looks them up in the symbol table, returns up to 20 summaries.
+  Skips self. Filters generated symbols (`.pb.go`, `.pb.gw.go`, `/gen/` paths)
+  via `isGenerated` to avoid flooding results with gRPC stubs
 
 ### mcp/server.go
 - Pure JSON-RPC 2.0 over stdin/stdout, no SDK dependency
