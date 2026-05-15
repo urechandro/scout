@@ -51,7 +51,7 @@ your codebase (.go + .proto files)
 |---|---|
 | `get_relevant_context(query)` | Primary tool. Exact name lookup + FTS + graph expansion + ranking. Returns symbol summaries within a 4k token budget. Includes a `packages` field grouping hits by package with counts and kinds when results span multiple packages. |
 | `get_pattern(task)` | Complete vertical slice: proto RPC → request/response messages → Go implementation, with full source bodies. Use before implementing a new RPC. Requires proto indexing; degrades to a single FTS hit otherwise. |
-| `get_body(symbol_id)` | Full source of one symbol plus signatures of referenced types/functions (up to 20). Call only when about to read or edit it. |
+| `get_body(symbol_id)` | Full source of one symbol plus signatures of referenced types/functions (up to 20). Works for any indexed symbol: Go functions, methods, structs, interfaces, **and proto messages, RPCs, enums, services**. Call only when about to read or edit it. |
 | `get_flow(symbol_id)` | Full source of a symbol plus caller/callee summaries in one call. Use instead of separate get_body + get_callers + get_callees. |
 | `get_impact(symbol_id)` | Full blast radius across layers. Traces proto↔Go name linkage, generated code, callers, implementors, and tests. Use before renaming or changing a type/field. |
 | `get_callers(symbol_id)` | Everything that calls this symbol. Falls back to interface/RPC lookup and body-reference heuristics when call graph edges are missing. |
@@ -189,13 +189,14 @@ scout/
 - **Query type detection** (`classifyQuery`): classifies queries upfront as
   `queryPrecise` (single compound/dotted identifier like `CreateShipmentLeg` or
   `grpc.Dial`) or `queryDiscovery` (multi-word natural language like "how does
-  auth work"). Precise queries get a 1000-token budget and skip FTS entirely
-  when Phase 1 produces hits. Discovery queries get the full 4000-token budget.
+  auth work"). Precise queries get a 1000-token budget and skip FTS entirely.
+  Discovery queries get the full 4000-token budget.
 - **Two-phase retrieval** in `GetRelevantContext`:
   - Phase 1: exact name lookup for compound identifiers (`extractCompoundIdents`
     detects PascalCase/camelCase). Score 3.0 + kindWeight + implBoost + generatedPenalty
-  - Phase 2: FTS fallback for remaining discovery. Skipped for precise queries
-    when Phase 1 hit. Fetches 3× the FTS limit, partitions into source vs
+  - Phase 2: FTS fallback for discovery queries only. Precise queries never
+    fall through to FTS — if Phase 1 misses, the response is empty, which
+    clearly signals "this symbol doesn't exist." Fetches 3× the FTS limit, partitions into source vs
     generated, caps generated at 5 (or unlimited if no source hits), then
     scores. Position-based score + nameMatchBonus + termCoverage + kindWeight +
     implBoost + generatedPenalty

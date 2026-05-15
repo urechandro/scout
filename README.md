@@ -68,10 +68,11 @@ available.
 | Read full source of a specific symbol | `get_body` with symbol ID from a previous result |
 | Understand a symbol's callers/callees with full body | `get_flow` |
 | Before implementing a pattern (outbox, pagination, auth) | `get_conventions` |
-| Read proto files, go.mod, config, non-Go files | `Read` |
+| Read go.mod, config, YAML, or other non-code files | `Read` |
 
 - **Start every task or question with a scout tool call.** Not grep. Not find. Not Read.
 - Include specific symbol names in queries (e.g. "CreateShipmentLeg" not "create shipment leg").
+- `get_body` works for **any indexed symbol** — Go functions, methods, structs, interfaces, and proto messages, RPCs, enums, services. Do not use `Read` on .go or .proto files when you can use `get_body` instead.
 - Use get_body for cross-package lookups. Use Read for files you already know the path to.
 - Before changing a function signature, call get_callers to check blast radius.
 ```

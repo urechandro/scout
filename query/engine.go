@@ -125,8 +125,13 @@ func (e *Engine) GetRelevantContext(req ContextRequest) (*ContextResponse, error
 		}
 	}
 
-	// For precise queries, skip FTS entirely when Phase 1 produced hits.
-	skipFTS := qtype == queryPrecise && len(scored) > 0
+	// For precise queries, skip FTS entirely. When Phase 1 found hits we
+	// already have high-confidence results. When it found nothing, falling
+	// through to FTS would decompose the compound name into individual words
+	// (e.g. "BatchDelete" → "batch OR delete") producing noisy, misleading
+	// results. Better to return empty so the model knows the symbol doesn't
+	// exist.
+	skipFTS := qtype == queryPrecise
 
 	// Phase 2: FTS for remaining discovery.
 	if !skipFTS {
