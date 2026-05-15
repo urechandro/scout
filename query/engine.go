@@ -1624,6 +1624,15 @@ func extractCompoundIdents(task string) []string {
 			seen[w] = true
 			idents = append(idents, w)
 		}
+		// Dotted identifiers like "grpc.Dial" or "status.Error": extract
+		// the name part after the last dot for exact name lookup.
+		if dot := strings.LastIndex(w, "."); dot >= 0 && dot < len(w)-1 {
+			name := w[dot+1:]
+			if len(name) >= 2 && name[0] >= 'A' && name[0] <= 'Z' && !seen[name] {
+				seen[name] = true
+				idents = append(idents, name)
+			}
+		}
 	}
 	return idents
 }
