@@ -35,12 +35,13 @@ your codebase (.go + .proto files)
     store (SQLite)
       ├── symbols table (id, kind, signature, docstring, file, lines, body)
       ├── symbols_fts (FTS5 virtual table for text search)
-      └── edges table (from_id, to_id, kind: calls/implements/uses_type)
+      ├── edges table (from_id, to_id, kind: calls/implements/uses_type)
+      └── conventions table (from conventions.yaml)
         ↓  query
-    query engine (FTS search → graph expansion → rank → trim to token budget)
+    query engine (exact name lookup → FTS → graph expansion → rank → dedup → trim)
         ↓  JSON-RPC over stdio
     MCP server
-        ↓  .mcp.json
+        ↓  .mcp.json + CLAUDE.md
     Claude Code
 ```
 
@@ -48,11 +49,13 @@ your codebase (.go + .proto files)
 
 | Tool | Purpose |
 |---|---|
-| `get_relevant_context(task)` | Primary tool. FTS search + graph expansion + ranking. Returns symbol summaries within a token budget. Call before making any changes. |
+| `get_relevant_context(query)` | Primary tool. Exact name lookup + FTS + graph expansion + ranking. Returns symbol summaries within a 4k token budget. |
+| `get_pattern(task)` | Complete vertical slice: proto RPC → request/response messages → Go implementation, with full source bodies. Use before implementing a new RPC. Requires proto indexing; degrades to a single FTS hit otherwise. |
 | `get_body(symbol_id)` | Full source of one symbol. Call only when about to read or edit it. |
-| `get_callers(symbol_id)` | Everything that calls this symbol. Call before changing a function signature. |
-| `get_callees(symbol_id)` | Everything this symbol depends on. |
-| `get_conventions(topic)` | Look up a documented architectural pattern by topic (e.g. "pagination", "auth", "event handler"). Returns the pattern description, pseudocode structure, and example symbols. Falls back to FTS symbol search if no documented convention matches. |
+| `get_flow(symbol_id)` | Full source of a symbol plus caller/callee summaries in one call. Use instead of separate get_body + get_callers + get_callees. |
+| `get_callers(symbol_id)` | Everything that calls this symbol. Falls back to interface/RPC lookup and body-reference heuristics when call graph edges are missing. |
+| `get_callees(symbol_id)` | Everything this symbol depends on. Falls back to body-reference extraction. |
+| `get_conventions(topic)` | Look up a documented architectural pattern by topic (e.g. "pagination", "auth", "event handler"). Returns the pattern description, pseudocode structure, and resolved example symbols. Falls back to FTS if no convention matches. |
 
 ## Design Decisions
 
@@ -60,10 +63,23 @@ your codebase (.go + .proto files)
 signatures + docstrings, not full source. This keeps the tool result small.
 The model calls `get_body` only for symbols it's about to act on.
 
+**Exact name lookup before FTS.** The query engine's primary retrieval path is
+exact name lookup for compound identifiers (PascalCase/camelCase). FTS is the
+fallback for natural language queries. This solved a major precision problem:
+FTS with OR semantics returns too many results for broad terms like "service"
+or "shipment", drowning the relevant symbols. Exact lookup scores 3.0 vs FTS
+position-based ~0-1.0.
+
 **FTS5 only, no vector store.** SQLite FTS5 handles "find rate limiting",
 "find auth middleware" well enough for a codebase where you know the naming
 conventions. Vector search (LanceDB) can be added later as a second layer for
 semantic gap cases — the query engine is designed with this seam in mind.
+
+**CLAUDE.md is required for tool adoption.** Claude Code does not auto-inject
+MCP `prompts/get` results, and tool descriptions alone are not enough to make
+Claude use scout tools. A project CLAUDE.md with explicit directives ("Always
+use scout tools first. Not grep. Not find. Not Read.") is required. The README
+includes a template.
 
 **One MCP server, thin wrapper.** The MCP server is ~200 lines of JSON-RPC
 over stdio. All the logic lives in the indexer and query engine as plain Go
@@ -123,6 +139,8 @@ scout/
 - Walks the configured directory for `.proto` files
 - Extracts services, RPCs, messages, and enums as symbols
 - Uses a line-by-line parser (no protoc dependency)
+- Tracks `blockSymIdx` in parse state to update LineEnd when closing braces are
+  found — this gives get_body full proto message/enum/service definitions
 - Supports `ExcludePaths` to skip generated or vendor directories
 
 ### store/store.go
@@ -131,16 +149,44 @@ scout/
 - `symbols_fts`: FTS5 virtual table, **standalone** (no `content=` option —
   this caused corruption bugs). Synced manually via delete+insert in UpsertSymbol
 - `edges` table: directed graph edges with kind (calls/implements/uses_type)
+- `conventions` table: populated from conventions.yaml by the indexer
 - Body field stores a line reference `/* file.go:42-67 */` not full source,
   keeping the index small. Full source read from disk via `get_body`.
+- `GetByName`, `GetByNameAndKind`: exact name lookups used by Phase 1 retrieval
+- `SearchFTSByKinds`: kind-filtered FTS queries (used by get_pattern to search
+  RPCs directly instead of getting mixed results)
+- `FuzzyGetSymbol`: suffix + name matching for partial/guessed symbol IDs
 
 ### query/engine.go
-- `buildFTSQuery`: strips stop words, ORs remaining terms
-- `expand`: BFS over call graph from FTS hits, depth 1 by default
-  - Callers scored 0.4/depth (higher — blast radius matters)
-  - Callees scored 0.3/depth
-- `trimToBudget`: greedy fill, ~4 chars per token estimate
-- Returns `SymbolSummary` (no body) + `GraphContext` (caller/callee IDs)
+- **Two-phase retrieval** in `GetRelevantContext`:
+  - Phase 1: exact name lookup for compound identifiers (`extractCompoundIdents`
+    detects PascalCase/camelCase). Score 3.0 + kindWeight + implBoost + generatedPenalty
+  - Phase 2: FTS fallback for remaining discovery. Position-based score +
+    nameMatchBonus + termCoverage + kindWeight + implBoost + generatedPenalty
+- **Scoring pipeline**: multi-signal, additive
+  - `kindWeight`: methods +0.3, funcs +0.2, interfaces +0.1, structs -0.3
+  - `nameMatchBonus`: +1.0 for func/method, +0.7 interface, +0.3 others (skipped
+    when name frequency ≥ 3 to suppress boilerplate like Validate)
+  - `termCoverage`: quadratic reward for matching multiple query terms
+    (`coverage² × 1.5`). Uses decomposed compound parts for scoring only (not
+    added to FTS query — that broadened results)
+  - `implBoost`: +0.5 for methods/funcs in svc/server/service packages
+  - `generatedPenalty`: -0.6 for .pb.go and .pb.gw.go files
+- **Dedup** (`dedup()`): two passes
+  1. Gen-path dedup: same name+kind across multiple /gen/ directories → keep
+     backend copy only. Critical for codebases with multiple generated copies
+  2. Name dedup: when 3+ symbols share a name (e.g. Validate on every resource
+     type), keep highest-scored, penalize by group size (−0.15 per extra)
+- `getPatternSlices`: exact RPC name lookup first, FTS by kind as fallback.
+  Builds a `PatternSlice` (proto RPC → request/response messages → Go impl)
+  with full bodies for get_pattern, summaries-only for conventions
+- `expand`: BFS over call graph from seeds, depth 1 by default
+  - Callers scored 0.4/depth, callees 0.3/depth
+- `trimToBudget`: greedy fill, ~4 chars per token estimate, default 4000 tokens
+- `buildFTSQuery`: strips stop words, ORs remaining terms. Dynamic FTS limit:
+  `30 + len(queryTerms)*10`
+- Compound identifier utilities: `extractCompoundIdents`, `extractCompoundParts`,
+  `isCompoundIdent`, `decomposeIdentifier`
 
 ### mcp/server.go
 - Pure JSON-RPC 2.0 over stdin/stdout, no SDK dependency
@@ -148,29 +194,44 @@ scout/
 - 4MB scanner buffer for large responses
 - Tool schemas embedded directly — no external schema files
 
+## What Works Well (Dogfooding Results)
+
+Tested on a production Go codebase (~14k symbols, 78% generated). Key findings:
+
+- **`get_pattern`** is the standout tool. Returns a complete vertical slice
+  (proto RPC → messages → Go impl) with full source in one call. Saves 1-2
+  round trips vs manual exploration. Nails the "add a new RPC following this
+  pattern" use case.
+- **`get_conventions`** saves 3-4 round trips when implementing cross-cutting
+  patterns (pagination, outbox, auth). The structured pseudocode + resolved
+  examples give Claude enough context to implement correctly on the first try.
+- **`get_relevant_context`** is best for cross-cutting discovery ("who uses this
+  pattern?", "where is auth enforced?") — not for surgical single-symbol lookups.
+- **Exact name lookup** is the primary retrieval path. When the model includes a
+  specific symbol name like `CreateShipmentLeg`, it gets a direct hit (score 3.0)
+  instead of wading through FTS noise.
+
 ## Known Issues / Next Steps
-
-### Vision: task-shaped queries, not symbol lookups
-
-The current tool thinks in symbols (one at a time). What's actually needed is
-tools that think in tasks — multi-layer, spanning proto → generated Go → server
-implementation → tests in a single query. Prioritised next steps:
 
 ### High value
 - **`get_unimplemented(service)`** — diff proto service definition against Go
   server struct, return which RPCs are missing or stubbed. Gap-filling tasks
   need to know what doesn't exist yet before they can add it.
+- **External dependency indexing** — scout only indexes the target codebase.
+  Symbols from imported packages (e.g. `einride/protobuf-*`) are not in the
+  index. When Claude needs to understand an imported type, it falls back to
+  grep/Read.
+- **"Find simplest example" queries** — "which RPC has the fewest dependencies?"
+  isn't expressible in the current tool set. The model has to call get_pattern
+  on several RPCs and compare manually.
 
 ### Medium value
 - **Cross-layer impact** — "what's affected if I change this proto field?" spans
   proto → generated Go → server code → tests. Current `get_callers` is Go-only.
 
 ### Housekeeping
-- Build a `scout` CLI (Go, `cmd/cli`) to replace `scripts/reindex.sh`.
-  Subcommands: `index`, `browse`, `rebuild`. Flags: `--dir`, `--exclude`.
 - No tests yet.
 - Pre-commit hook not tested end-to-end.
-- `.mcp.json` has placeholder path — needs real project path.
 
 ## Dependencies
 
