@@ -186,11 +186,17 @@ scout/
 - `FuzzyGetSymbol`: suffix + name matching for partial/guessed symbol IDs
 
 ### query/engine.go
+- **Query type detection** (`classifyQuery`): classifies queries upfront as
+  `queryPrecise` (single compound/dotted identifier like `CreateShipmentLeg` or
+  `grpc.Dial`) or `queryDiscovery` (multi-word natural language like "how does
+  auth work"). Precise queries get a 1000-token budget and skip FTS entirely
+  when Phase 1 produces hits. Discovery queries get the full 4000-token budget.
 - **Two-phase retrieval** in `GetRelevantContext`:
   - Phase 1: exact name lookup for compound identifiers (`extractCompoundIdents`
     detects PascalCase/camelCase). Score 3.0 + kindWeight + implBoost + generatedPenalty
-  - Phase 2: FTS fallback for remaining discovery. Position-based score +
-    nameMatchBonus + termCoverage + kindWeight + implBoost + generatedPenalty
+  - Phase 2: FTS fallback for remaining discovery. Skipped for precise queries
+    when Phase 1 hit. Position-based score + nameMatchBonus + termCoverage +
+    kindWeight + implBoost + generatedPenalty
 - **Scoring pipeline**: multi-signal, additive
   - `kindWeight`: methods +0.3, funcs +0.2, interfaces +0.1, structs -0.3
   - `nameMatchBonus`: +1.0 for func/method, +0.7 interface, +0.3 others (skipped
@@ -213,7 +219,8 @@ scout/
 - `buildPackageSummary`: groups returned symbols by directory, strips common path
   prefix for short relative paths, returns per-package hit count + kind breakdown.
   Omitted when results are single-symbol or single-package
-- `trimToBudget`: greedy fill, ~4 chars per token estimate, default 4000 tokens
+- `trimToBudget`: greedy fill, ~4 chars per token estimate, budget varies by
+  query type (1000 for precise, 4000 for discovery)
 - `buildFTSQuery`: strips stop words, ORs remaining terms. Dynamic FTS limit:
   `30 + len(queryTerms)*10`
 - Compound identifier utilities: `extractCompoundIdents`, `extractCompoundParts`,

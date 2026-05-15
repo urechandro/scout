@@ -61,10 +61,47 @@ func New(s *store.Store) *Engine {
 	return &Engine{store: s}
 }
 
+// queryType classifies a query as either a precise symbol lookup or a broad
+// discovery question. Precise queries get a smaller token budget and skip FTS
+// when Phase 1 produces hits.
+type queryType int
+
+const (
+	queryDiscovery queryType = iota
+	queryPrecise
+)
+
+// classifyQuery determines whether a query is a precise symbol lookup
+// (single compound/dotted identifier like "grpc.Dial" or "CreateShipmentLeg")
+// or a broader discovery question ("how does auth work").
+func classifyQuery(task string) queryType {
+	fields := strings.Fields(task)
+	if len(fields) != 1 {
+		return queryDiscovery
+	}
+	w := strings.TrimFunc(fields[0], func(r rune) bool {
+		return !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '.')
+	})
+	if isCompoundIdent(w) {
+		return queryPrecise
+	}
+	if strings.Contains(w, ".") {
+		return queryPrecise
+	}
+	return queryDiscovery
+}
+
 // GetRelevantContext is the primary MCP tool entry point.
 func (e *Engine) GetRelevantContext(req ContextRequest) (*ContextResponse, error) {
+	qtype := classifyQuery(req.Task)
+
 	if req.BudgetTokens == 0 {
-		req.BudgetTokens = 4000
+		switch qtype {
+		case queryPrecise:
+			req.BudgetTokens = 1000
+		default:
+			req.BudgetTokens = 4000
+		}
 	}
 	if req.MaxExpansionDepth == 0 {
 		req.MaxExpansionDepth = 1
@@ -88,43 +125,48 @@ func (e *Engine) GetRelevantContext(req ContextRequest) (*ContextResponse, error
 		}
 	}
 
+	// For precise queries, skip FTS entirely when Phase 1 produced hits.
+	skipFTS := qtype == queryPrecise && len(scored) > 0
+
 	// Phase 2: FTS for remaining discovery.
-	ftsQuery := buildFTSQuery(req.Task)
-	queryTerms := strings.Split(ftsQuery, " OR ")
-	compoundParts := extractCompoundParts(req.Task)
-	scoringTerms := append(queryTerms, compoundParts...)
-	ftsLimit := 30 + len(queryTerms)*10
-	hits, err := e.store.SearchFTS(ftsQuery, ftsLimit)
-	if err != nil {
-		return nil, fmt.Errorf("fts search: %w", err)
-	}
-
-	nameFreq := make(map[string]int, len(hits))
-	for _, sym := range hits {
-		nameFreq[strings.ToLower(sym.Name)]++
-	}
-
-	for i, sym := range hits {
-		if scored[sym.ID] != nil {
-			continue
+	if !skipFTS {
+		ftsQuery := buildFTSQuery(req.Task)
+		queryTerms := strings.Split(ftsQuery, " OR ")
+		compoundParts := extractCompoundParts(req.Task)
+		scoringTerms := append(queryTerms, compoundParts...)
+		ftsLimit := 30 + len(queryTerms)*10
+		hits, err := e.store.SearchFTS(ftsQuery, ftsLimit)
+		if err != nil {
+			return nil, fmt.Errorf("fts search: %w", err)
 		}
-		score := float64(len(hits)-i) / float64(len(hits))
-		nameLower := strings.ToLower(sym.Name)
-		decomposed := strings.ToLower(decomposeIdentifier(sym.Name))
-		if nameFreq[nameLower] < 3 {
-			for _, term := range scoringTerms {
-				if nameLower == term {
-					score += nameMatchBonus(sym)
-					break
+
+		nameFreq := make(map[string]int, len(hits))
+		for _, sym := range hits {
+			nameFreq[strings.ToLower(sym.Name)]++
+		}
+
+		for i, sym := range hits {
+			if scored[sym.ID] != nil {
+				continue
+			}
+			score := float64(len(hits)-i) / float64(len(hits))
+			nameLower := strings.ToLower(sym.Name)
+			decomposed := strings.ToLower(decomposeIdentifier(sym.Name))
+			if nameFreq[nameLower] < 3 {
+				for _, term := range scoringTerms {
+					if nameLower == term {
+						score += nameMatchBonus(sym)
+						break
+					}
 				}
 			}
+			score += termCoverage(sym, scoringTerms, decomposed)
+			score += kindWeight(sym)
+			score += implBoost(sym)
+			score += generatedPenalty(sym)
+			s := toSummary(sym, score, "semantic match")
+			scored[sym.ID] = &s
 		}
-		score += termCoverage(sym, scoringTerms, decomposed)
-		score += kindWeight(sym)
-		score += implBoost(sym)
-		score += generatedPenalty(sym)
-		s := toSummary(sym, score, "semantic match")
-		scored[sym.ID] = &s
 	}
 
 	scored = dedup(scored)
