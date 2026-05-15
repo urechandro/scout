@@ -69,15 +69,22 @@ func (e *Engine) GetRelevantContext(req ContextRequest) (*ContextResponse, error
 		return nil, fmt.Errorf("fts search: %w", err)
 	}
 
+	nameFreq := make(map[string]int, len(hits))
+	for _, sym := range hits {
+		nameFreq[strings.ToLower(sym.Name)]++
+	}
+
 	scored := make(map[string]*SymbolSummary, len(hits))
 	for i, sym := range hits {
 		score := float64(len(hits)-i) / float64(len(hits))
 		nameLower := strings.ToLower(sym.Name)
 		decomposed := strings.ToLower(decomposeIdentifier(sym.Name))
-		for _, term := range queryTerms {
-			if nameLower == term {
-				score += nameMatchBonus(sym)
-				break
+		if nameFreq[nameLower] < 3 {
+			for _, term := range queryTerms {
+				if nameLower == term {
+					score += nameMatchBonus(sym)
+					break
+				}
 			}
 		}
 		score += termCoverage(sym, queryTerms, decomposed)
@@ -87,6 +94,8 @@ func (e *Engine) GetRelevantContext(req ContextRequest) (*ContextResponse, error
 		s := toSummary(sym, score, "semantic match")
 		scored[sym.ID] = &s
 	}
+
+	scored = dedup(scored)
 
 	if req.MaxExpansionDepth > 0 {
 		expanded, err := e.expand(scored, req.MaxExpansionDepth)
@@ -747,6 +756,35 @@ func trimToBudget(ranked []*SymbolSummary, budgetTokens int) ([]SymbolSummary, i
 	}
 
 	return kept, 0
+}
+
+// dedup collapses groups of symbols that share the same name. When 3+ symbols
+// have identical names (e.g. Validate on every resource type), only the
+// highest-scored one survives — the rest are dropped. This prevents generated
+// or boilerplate methods from flooding results.
+func dedup(scored map[string]*SymbolSummary) map[string]*SymbolSummary {
+	byName := make(map[string][]*SymbolSummary)
+	for _, s := range scored {
+		name := s.ID
+		if idx := strings.LastIndex(name, "."); idx >= 0 {
+			name = name[idx+1:]
+		}
+		byName[name] = append(byName[name], s)
+	}
+
+	for name, group := range byName {
+		if len(group) < 3 {
+			continue
+		}
+		sort.Slice(group, func(i, j int) bool { return group[i].Score > group[j].Score })
+		for _, s := range group[1:] {
+			delete(scored, s.ID)
+		}
+		penalty := float64(len(group)-2) * 0.15
+		group[0].Score -= penalty
+		group[0].Why += fmt.Sprintf(" (+%d similar %s omitted)", len(group)-1, name)
+	}
+	return scored
 }
 
 // termCoverage rewards symbols whose name or signature matches multiple query
