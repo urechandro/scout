@@ -379,23 +379,62 @@ func (e *Engine) GetImpact(symbolID string) (*ImpactResponse, error) {
 		affected = append(affected, toSummary(c, 0, "references "+sym.Name+" (heuristic)"))
 	}
 
-	// Classify into layers.
+	// Classify into layers, deduping generated copies across /gen/ directories.
+	var generated []SymbolSummary
 	for _, s := range affected {
 		layer := classifyLayer(s.File)
 		switch layer {
 		case LayerProto:
 			resp.Proto = append(resp.Proto, s)
 		case LayerGenerated:
-			resp.Generated = append(resp.Generated, s)
+			generated = append(generated, s)
 		case LayerTest:
 			resp.Tests = append(resp.Tests, s)
 		default:
 			resp.Implementation = append(resp.Implementation, s)
 		}
 	}
+	resp.Generated = dedupGenerated(generated)
 
-	resp.Total = len(affected)
+	resp.Total = len(resp.Proto) + len(resp.Generated) + len(resp.Implementation) + len(resp.Tests)
 	return resp, nil
+}
+
+// dedupGenerated collapses symbols with the same name+kind across /gen/ directories,
+// preferring the backend copy.
+func dedupGenerated(syms []SymbolSummary) []SymbolSummary {
+	type key struct{ name, kind string }
+	groups := map[key][]SymbolSummary{}
+	var order []key
+	for _, s := range syms {
+		name := s.ID
+		if idx := strings.LastIndex(name, "."); idx >= 0 {
+			name = name[idx+1:]
+		}
+		k := key{name, s.Kind}
+		if _, exists := groups[k]; !exists {
+			order = append(order, k)
+		}
+		groups[k] = append(groups[k], s)
+	}
+	var out []SymbolSummary
+	for _, k := range order {
+		group := groups[k]
+		if len(group) == 1 {
+			out = append(out, group[0])
+			continue
+		}
+		best := group[0]
+		for _, s := range group[1:] {
+			if strings.Contains(s.File, "backend") {
+				best = s
+				break
+			}
+		}
+		best.Why += fmt.Sprintf(" (+%d copies)", len(group)-1)
+		out = append(out, best)
+	}
+	return out
 }
 
 func classifyLayer(file string) ImpactLayer {
