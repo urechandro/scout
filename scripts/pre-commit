@@ -17,7 +17,7 @@ fi
 
 echo "scout: reindexing changed files..."
 
-indexer --db "$DB" --dir "$(pwd)" --files "$CHANGED"
+scout-index --db "$DB" --dir "$(pwd)" --files "$CHANGED"
 
 if [ $? -ne 0 ]; then
   echo "scout: reindex failed (non-fatal, continuing commit)"

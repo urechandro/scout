@@ -9,8 +9,8 @@ Requires Go 1.21+. The target codebase must also have Go available (the indexer
 shells out to `go list` for type resolution).
 
 ```sh
-go install github.com/urechandro/scout/cmd/indexer@latest
-go install github.com/urechandro/scout/cmd/server@latest
+go install github.com/urechandro/scout/cmd/scout-index@latest
+go install github.com/urechandro/scout/cmd/scout-server@latest
 ```
 
 ## Usage
@@ -18,7 +18,7 @@ go install github.com/urechandro/scout/cmd/server@latest
 ### 1. Index your codebase
 
 ```sh
-indexer --db /your/project/.scout/index.db --root /your/project
+scout-index --db /your/project/.scout/index.db --root /your/project
 ```
 
 Proto files (`.proto`) are indexed automatically alongside Go. Use `--exclude`
@@ -27,26 +27,28 @@ to skip generated or vendored proto directories.
 For incremental reindex (e.g. from a pre-commit hook):
 
 ```sh
-indexer --db /your/project/.scout/index.db --root /your/project \
+scout-index --db /your/project/.scout/index.db --root /your/project \
   --files path/to/changed.go,other.go
 ```
 
 ### 2. Wire up Claude Code
 
-Add to `.claude/settings.json` in your project root:
+Add to `.mcp.json` in your project root:
 
 ```json
 {
   "mcpServers": {
     "scout": {
-      "command": "server",
-      "args": ["--db", "/your/project/.scout/index.db"]
+      "type": "stdio",
+      "command": "scout-server",
+      "args": ["--db", "/your/project/.scout/index.db"],
+      "env": {}
     }
   }
 }
 ```
 
-If `server` is not on your `$PATH`, use the full path (e.g. `~/go/bin/server`).
+If `scout-server` is not on your `$PATH`, use the full path (e.g. `~/go/bin/scout-server`).
 
 ### 3. Inspect the index (optional)
 

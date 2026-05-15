@@ -78,8 +78,8 @@ binaries via `go install`. The target machine needs Go available because
 ```
 scout/
 ├── cmd/
-│   ├── indexer/main.go     — CLI: run full or incremental index
-│   └── server/main.go      — CLI: run MCP server over stdio
+│   ├── scout-index/main.go — CLI: run full or incremental index
+│   └── scout-server/main.go — CLI: run MCP server over stdio
 ├── indexer/
 │   ├── indexer.go          — Parses Go packages via go/packages, extracts
 │   │                         symbols and call edges, writes to store
@@ -183,18 +183,18 @@ modernc.org/sqlite v1.30.0   — pure Go SQLite driver (CGO_ENABLED=1 for perf)
 
 ### Install
 ```sh
-go install github.com/urechandro/scout/cmd/indexer@latest
-go install github.com/urechandro/scout/cmd/server@latest
+go install github.com/urechandro/scout/cmd/scout-index@latest
+go install github.com/urechandro/scout/cmd/scout-server@latest
 ```
 
 ### Full index
 ```sh
-indexer --db /your/project/.scout/index.db --root /your/project
+scout-index --db /your/project/.scout/index.db --root /your/project
 ```
 
 ### Incremental reindex
 ```sh
-indexer --db /your/project/.scout/index.db --root /your/project \
+scout-index --db /your/project/.scout/index.db --root /your/project \
   --files path/to/changed.go,other.go
 ```
 
@@ -246,7 +246,7 @@ Add to `.mcp.json` in your project root. Claude Code picks it up automatically.
   "mcpServers": {
     "scout": {
       "type": "stdio",
-      "command": "server",
+      "command": "scout-server",
       "args": ["--db", "/your/project/.scout/index.db"],
       "env": {}
     }
@@ -254,4 +254,4 @@ Add to `.mcp.json` in your project root. Claude Code picks it up automatically.
 }
 ```
 
-If `server` is not on your `$PATH`, use the full path (e.g. `~/go/bin/server`).
+If `scout-server` is not on your `$PATH`, use the full path (e.g. `~/go/bin/scout-server`).
