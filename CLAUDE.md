@@ -51,7 +51,7 @@ your codebase (.go + .proto files)
 |---|---|
 | `get_relevant_context(query)` | Primary tool. Exact name lookup + FTS + graph expansion + ranking. Returns symbol summaries within a 4k token budget. |
 | `get_pattern(task)` | Complete vertical slice: proto RPC → request/response messages → Go implementation, with full source bodies. Use before implementing a new RPC. Requires proto indexing; degrades to a single FTS hit otherwise. |
-| `get_body(symbol_id)` | Full source of one symbol. Call only when about to read or edit it. |
+| `get_body(symbol_id)` | Full source of one symbol plus signatures of referenced types/functions (up to 20). Call only when about to read or edit it. |
 | `get_flow(symbol_id)` | Full source of a symbol plus caller/callee summaries in one call. Use instead of separate get_body + get_callers + get_callees. |
 | `get_callers(symbol_id)` | Everything that calls this symbol. Falls back to interface/RPC lookup and body-reference heuristics when call graph edges are missing. |
 | `get_callees(symbol_id)` | Everything this symbol depends on. Falls back to body-reference extraction. |
@@ -62,7 +62,10 @@ your codebase (.go + .proto files)
 
 **Summaries by default, bodies on demand.** `get_relevant_context` returns
 signatures + docstrings, not full source. This keeps the tool result small.
-The model calls `get_body` only for symbols it's about to act on.
+The model calls `get_body` only for symbols it's about to act on. When it
+does, `get_body` also returns a `references` field with summaries (signatures
++ locations) of types and functions referenced in the body — this eliminates
+follow-up calls to understand dependencies before editing.
 
 **Exact name lookup before FTS.** The query engine's primary retrieval path is
 exact name lookup for compound identifiers (PascalCase/camelCase). FTS is the
@@ -188,6 +191,9 @@ scout/
   `30 + len(queryTerms)*10`
 - Compound identifier utilities: `extractCompoundIdents`, `extractCompoundParts`,
   `isCompoundIdent`, `decomposeIdentifier`
+- `extractReferences`: called by `GetBody`, extracts identifiers from the symbol's
+  body via `extractCallIdents`, looks them up in the symbol table, returns up to
+  20 summaries. Skips self. Lets the agent see dependencies inline without extra calls
 
 ### mcp/server.go
 - Pure JSON-RPC 2.0 over stdin/stdout, no SDK dependency
