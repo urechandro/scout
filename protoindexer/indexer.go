@@ -77,17 +77,20 @@ func (idx *Indexer) Run() error {
 
 // parseState tracks parser state while scanning a .proto file line by line.
 type parseState struct {
-	pkg        string   // proto package declaration
-	braceDepth int      // current nesting depth
+	pkg        string // proto package declaration
+	braceDepth int    // current nesting depth
 	// current enclosing declaration at depth 1
-	inService  string
-	inMessage  string
-	inEnum     string
+	inService string
+	inMessage string
+	inEnum    string
+	// index into syms slice for the current top-level block, so we can
+	// update LineEnd when the closing brace is found.
+	blockSymIdx int
 	// comment lines accumulated before the next declaration
 	pendingDoc []string
 	// for multi-line rpc signatures
-	rpcBuffer  string
-	inRPC      bool
+	rpcBuffer string
+	inRPC     bool
 }
 
 func (idx *Indexer) indexFile(path string) (int, error) {
@@ -98,7 +101,7 @@ func (idx *Indexer) indexFile(path string) (int, error) {
 	defer f.Close()
 
 	var syms []store.Symbol
-	state := &parseState{}
+	state := &parseState{blockSymIdx: -1}
 	lineNum := 0
 
 	scanner := bufio.NewScanner(f)
@@ -147,6 +150,7 @@ func (idx *Indexer) indexFile(path string) (int, error) {
 			state.inService = name
 			state.inMessage = ""
 			state.inEnum = ""
+			state.blockSymIdx = len(syms) - 1
 			state.pendingDoc = nil
 			state.braceDepth += opens - closes
 			continue
@@ -176,6 +180,7 @@ func (idx *Indexer) indexFile(path string) (int, error) {
 				state.inMessage = qualName
 				state.inService = ""
 				state.inEnum = ""
+				state.blockSymIdx = len(syms) - 1
 			}
 			state.pendingDoc = nil
 			state.braceDepth += opens - closes
@@ -206,6 +211,7 @@ func (idx *Indexer) indexFile(path string) (int, error) {
 				state.inEnum = qualName
 				state.inService = ""
 				state.inMessage = ""
+				state.blockSymIdx = len(syms) - 1
 			}
 			state.pendingDoc = nil
 			state.braceDepth += opens - closes
@@ -254,9 +260,13 @@ func (idx *Indexer) indexFile(path string) (int, error) {
 		prev := state.braceDepth
 		state.braceDepth += opens - closes
 		if state.braceDepth < prev && state.braceDepth == 0 {
+			if state.blockSymIdx >= 0 && state.blockSymIdx < len(syms) {
+				syms[state.blockSymIdx].LineEnd = lineNum
+			}
 			state.inService = ""
 			state.inMessage = ""
 			state.inEnum = ""
+			state.blockSymIdx = -1
 		}
 
 		if trimmed != "" {
