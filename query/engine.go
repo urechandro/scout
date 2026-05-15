@@ -145,8 +145,9 @@ func (e *Engine) GetRelevantContext(req ContextRequest) (*ContextResponse, error
 // disambiguation hints when the lookup was fuzzy.
 type BodyResponse struct {
 	*store.Symbol
-	Hint       string   `json:"hint,omitempty"`
-	OtherIDs   []string `json:"other_ids,omitempty"`
+	Hint       string          `json:"hint,omitempty"`
+	OtherIDs   []string        `json:"other_ids,omitempty"`
+	References []SymbolSummary `json:"references,omitempty"`
 }
 
 // GetBody returns the full source of a symbol.
@@ -178,7 +179,43 @@ func (e *Engine) GetBody(symbolID string) (*BodyResponse, error) {
 		resp.Hint = fmt.Sprintf("Fuzzy match: requested %q, resolved to %q", symbolID, sym.ID)
 	}
 
+	resp.References = e.extractReferences(sym)
+
 	return resp, nil
+}
+
+// extractReferences finds types and functions referenced in a symbol's body
+// and returns their summaries (signatures only, no bodies).
+func (e *Engine) extractReferences(sym *store.Symbol) []SymbolSummary {
+	if sym.Body == "" {
+		return nil
+	}
+
+	names := extractCallIdents(sym.Body)
+	if len(names) == 0 {
+		return nil
+	}
+
+	seen := map[string]bool{sym.ID: true}
+	var refs []SymbolSummary
+	for _, name := range names {
+		syms, err := e.store.GetByName(name)
+		if err != nil {
+			continue
+		}
+		for _, s := range syms {
+			if seen[s.ID] {
+				continue
+			}
+			seen[s.ID] = true
+			refs = append(refs, toSummary(s, 0, "referenced"))
+		}
+	}
+
+	if len(refs) > 20 {
+		refs = refs[:20]
+	}
+	return refs
 }
 
 // GetCallers returns summaries of all symbols that call the given symbol.

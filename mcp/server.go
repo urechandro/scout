@@ -191,6 +191,8 @@ Returns at most budget_tokens worth of summaries. Each result includes a symbol_
 
 Typical flow: get_relevant_context → pick 1-2 symbol IDs → get_body on each.
 
+The response includes a "references" field with signatures of types and functions referenced in the body. This lets you understand dependencies without extra calls — only call get_body on a reference if you need its full source.
+
 Accepts exact IDs (from previous tool results) or partial/guessed IDs — it will fuzzy-match by suffix then by name. For example, "Server.CreateShipment" resolves to the full ID. If multiple symbols match, the response includes other_ids for disambiguation.
 
 Prefer IDs from get_relevant_context results over guessing. But if you must guess, use the shortest unambiguous suffix: "TypeName.MethodName" or just "FuncName".`,
