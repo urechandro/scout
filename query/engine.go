@@ -62,26 +62,26 @@ func (e *Engine) GetRelevantContext(req ContextRequest) (*ContextResponse, error
 	}
 
 	ftsQuery := buildFTSQuery(req.Task)
-	hits, err := e.store.SearchFTS(ftsQuery, 30)
+	queryTerms := strings.Split(ftsQuery, " OR ")
+	ftsLimit := 30 + len(queryTerms)*10
+	hits, err := e.store.SearchFTS(ftsQuery, ftsLimit)
 	if err != nil {
 		return nil, fmt.Errorf("fts search: %w", err)
 	}
 
-	// Extract individual terms for name-match boosting.
-	queryTerms := strings.Split(buildFTSQuery(req.Task), " OR ")
-
 	scored := make(map[string]*SymbolSummary, len(hits))
 	for i, sym := range hits {
 		score := float64(len(hits)-i) / float64(len(hits))
-		// Boost symbols whose name exactly matches a query term to the top.
 		nameLower := strings.ToLower(sym.Name)
+		decomposed := strings.ToLower(decomposeIdentifier(sym.Name))
 		for _, term := range queryTerms {
 			if nameLower == term {
-				score = 2.0
+				score += nameMatchBonus(sym)
 				break
 			}
 		}
-		// Boost server implementations; penalise proto-generated boilerplate.
+		score += termCoverage(sym, queryTerms, decomposed)
+		score += kindWeight(sym)
 		score += implBoost(sym)
 		score += generatedPenalty(sym)
 		s := toSummary(sym, score, "semantic match")
@@ -749,10 +749,75 @@ func trimToBudget(ranked []*SymbolSummary, budgetTokens int) ([]SymbolSummary, i
 	return kept, 0
 }
 
-// implBoost returns a score bonus for symbols that are likely server
-// implementations rather than proto definitions or interfaces. Methods in
-// packages containing "svc", "server", or "service" get a boost so they
-// surface above proto/interface symbols that match the same query terms.
+// termCoverage rewards symbols whose name or signature matches multiple query
+// terms. A symbol matching 3 of 4 terms ranks above one matching 1 of 4.
+func termCoverage(sym store.Symbol, terms []string, decomposedName string) float64 {
+	if len(terms) <= 1 {
+		return 0
+	}
+	searchable := strings.ToLower(sym.Name + " " + decomposedName + " " + sym.Package + " " + sym.Signature + " " + sym.Docstring)
+	matches := 0
+	for _, term := range terms {
+		if strings.Contains(searchable, term) {
+			matches++
+		}
+	}
+	if matches <= 1 {
+		return 0
+	}
+	coverage := float64(matches) / float64(len(terms))
+	return coverage * coverage * 1.5
+}
+
+// decomposeIdentifier splits a camelCase or PascalCase name into lowercase words.
+func decomposeIdentifier(s string) string {
+	var words []string
+	start := 0
+	for i := 1; i < len(s); i++ {
+		if s[i] >= 'A' && s[i] <= 'Z' {
+			words = append(words, strings.ToLower(s[start:i]))
+			start = i
+		}
+	}
+	words = append(words, strings.ToLower(s[start:]))
+	return strings.Join(words, " ")
+}
+
+// nameMatchBonus returns the score bonus when a symbol's name exactly matches
+// a query term. Funcs/methods get a large bonus; structs/types get a small one
+// since they're usually not what the caller wants to read.
+func nameMatchBonus(sym store.Symbol) float64 {
+	switch sym.Kind {
+	case "func", "method":
+		return 1.0
+	case "interface":
+		return 0.7
+	default:
+		return 0.3
+	}
+}
+
+// kindWeight biases results toward behavior (funcs/methods) over structure
+// (structs/types). Queries almost always ask "how does X work", not "what
+// fields does X have".
+func kindWeight(sym store.Symbol) float64 {
+	switch sym.Kind {
+	case "method":
+		return 0.3
+	case "func":
+		return 0.2
+	case "interface":
+		return 0.1
+	case "struct":
+		return -0.3
+	case "type", "const", "var":
+		return -0.2
+	default:
+		return 0
+	}
+}
+
+// implBoost returns a score bonus for symbols in server/svc packages.
 func implBoost(sym store.Symbol) float64 {
 	if sym.Kind != "method" && sym.Kind != "func" {
 		return 0
@@ -762,10 +827,6 @@ func implBoost(sym store.Symbol) float64 {
 		strings.Contains(pkg, "server") ||
 		strings.Contains(pkg, "service") {
 		return 0.5
-	}
-	// Smaller boost for any method (over types/interfaces/protos).
-	if sym.Kind == "method" {
-		return 0.2
 	}
 	return 0
 }
