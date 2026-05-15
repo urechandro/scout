@@ -53,6 +53,7 @@ your codebase (.go + .proto files)
 | `get_pattern(task)` | Complete vertical slice: proto RPC → request/response messages → Go implementation, with full source bodies. Use before implementing a new RPC. Requires proto indexing; degrades to a single FTS hit otherwise. |
 | `get_body(symbol_id)` | Full source of one symbol plus signatures of referenced types/functions (up to 20). Call only when about to read or edit it. |
 | `get_flow(symbol_id)` | Full source of a symbol plus caller/callee summaries in one call. Use instead of separate get_body + get_callers + get_callees. |
+| `get_impact(symbol_id)` | Full blast radius across layers. Traces proto↔Go name linkage, generated code, callers, implementors, and tests. Use before renaming or changing a type/field. |
 | `get_callers(symbol_id)` | Everything that calls this symbol. Falls back to interface/RPC lookup and body-reference heuristics when call graph edges are missing. |
 | `get_callees(symbol_id)` | Everything this symbol depends on. Falls back to body-reference extraction. |
 | `get_unimplemented(service)` | Diff a proto service against Go server methods. Returns which RPCs are missing or stubbed (`codes.Unimplemented`). Call before adding a new RPC. |
@@ -199,6 +200,15 @@ scout/
   type names), looks them up in the symbol table, returns up to 20 summaries.
   Skips self. Filters generated symbols (`.pb.go`, `.pb.gw.go`, `/gen/` paths)
   via `isGenerated` to avoid flooding results with gRPC stubs
+- **`GetImpact`**: cross-layer blast radius analysis in 6 phases:
+  1. Same-name lookup across layers (proto↔Go name linkage via `GetByName`)
+  2. RPC request/response message discovery (via `parseRPCMessages`)
+  3. Interface/RPC implementation chain (`GetImplements`)
+  4. Reverse: implementors of interfaces/RPCs (`GetImplementors`)
+  5. Callers of all discovered non-generated Go symbols (`GetCallers`)
+  6. Body-reference fallback (`GetCallersFromBody`)
+  Results classified into layers (proto/generated/implementation/test) by
+  `classifyLayer` using file extension heuristics
 
 ### mcp/server.go
 - Pure JSON-RPC 2.0 over stdin/stdout, no SDK dependency
@@ -233,10 +243,6 @@ Tested on a production Go codebase (~14k symbols, 78% generated). Key findings:
 - **"Find simplest example" queries** — "which RPC has the fewest dependencies?"
   isn't expressible in the current tool set. The model has to call get_pattern
   on several RPCs and compare manually.
-
-### Medium value
-- **Cross-layer impact** — "what's affected if I change this proto field?" spans
-  proto → generated Go → server code → tests. Current `get_callers` is Go-only.
 
 ### Housekeeping
 - No tests yet.

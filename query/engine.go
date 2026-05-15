@@ -250,6 +250,167 @@ func isGenerated(file string) bool {
 		strings.Contains(file, "/gen/")
 }
 
+// ImpactLayer classifies a symbol's position in the codebase stack.
+type ImpactLayer string
+
+const (
+	LayerProto          ImpactLayer = "proto"
+	LayerGenerated      ImpactLayer = "generated"
+	LayerImplementation ImpactLayer = "implementation"
+	LayerTest           ImpactLayer = "test"
+)
+
+// ImpactResponse is returned by GetImpact.
+type ImpactResponse struct {
+	Symbol         SymbolSummary   `json:"symbol"`
+	Proto          []SymbolSummary `json:"proto,omitempty"`
+	Generated      []SymbolSummary `json:"generated,omitempty"`
+	Implementation []SymbolSummary `json:"implementation,omitempty"`
+	Tests          []SymbolSummary `json:"tests,omitempty"`
+	Total          int             `json:"total"`
+}
+
+// GetImpact traces all symbols affected if the given symbol changes.
+// Unlike GetCallers (one hop, Go-only), this crosses proto↔Go boundaries,
+// follows name-based linkage through generated code, and groups results by layer.
+func (e *Engine) GetImpact(symbolID string) (*ImpactResponse, error) {
+	resolvedID, err := e.resolveSymbolID(symbolID)
+	if err != nil {
+		return nil, fmt.Errorf("get impact for %s: %w", symbolID, err)
+	}
+
+	sym, err := e.store.GetSymbol(resolvedID)
+	if err != nil {
+		return nil, fmt.Errorf("get impact for %s: %w", resolvedID, err)
+	}
+
+	resp := &ImpactResponse{
+		Symbol: toSummary(*sym, 0, "target"),
+	}
+
+	visited := map[string]bool{resolvedID: true}
+	var affected []SymbolSummary
+
+	// Phase 1: find same-name symbols across layers (proto↔Go linkage).
+	sameNameSyms, _ := e.store.GetByName(sym.Name)
+	for _, s := range sameNameSyms {
+		if visited[s.ID] {
+			continue
+		}
+		visited[s.ID] = true
+		why := "same name (cross-layer)"
+		if isGenerated(s.File) {
+			why = "generated code for " + sym.Name
+		}
+		affected = append(affected, toSummary(s, 0, why))
+	}
+
+	// Phase 2: if this is an RPC, find request/response messages.
+	if sym.Kind == "rpc" {
+		reqName, respName := parseRPCMessages(sym.Signature)
+		for _, msgName := range []string{reqName, respName} {
+			if msgName == "" {
+				continue
+			}
+			msgs, _ := e.store.GetByName(msgName)
+			for _, m := range msgs {
+				if visited[m.ID] {
+					continue
+				}
+				visited[m.ID] = true
+				affected = append(affected, toSummary(m, 0, "request/response message"))
+			}
+		}
+	}
+
+	// Phase 3: if this implements something, include what it implements.
+	impls, _ := e.store.GetImplements(resolvedID)
+	for _, s := range impls {
+		if visited[s.ID] {
+			continue
+		}
+		visited[s.ID] = true
+		why := "implements interface"
+		if s.Kind == "rpc" {
+			why = "implements RPC: " + s.Signature
+		}
+		affected = append(affected, toSummary(s, 0, why))
+	}
+
+	// Phase 4: if this is an interface or proto RPC, find implementors.
+	if sym.Kind == "interface" || sym.Kind == "rpc" || sym.Kind == "service" {
+		implementors, _ := e.store.GetImplementors(resolvedID)
+		for _, s := range implementors {
+			if visited[s.ID] {
+				continue
+			}
+			visited[s.ID] = true
+			affected = append(affected, toSummary(s, 0, "implements "+sym.Name))
+		}
+	}
+
+	// Phase 5: collect callers of the target and all related symbols.
+	// We trace callers for the original symbol plus any cross-layer matches.
+	callerSeeds := []string{resolvedID}
+	for _, s := range affected {
+		if !isGenerated(s.File) && s.Kind != "rpc" && s.Kind != "message" && s.Kind != "service" && s.Kind != "enum" {
+			callerSeeds = append(callerSeeds, s.ID)
+		}
+	}
+
+	for _, seedID := range callerSeeds {
+		callers, _ := e.store.GetCallers(seedID)
+		for _, c := range callers {
+			if visited[c.ID] {
+				continue
+			}
+			visited[c.ID] = true
+			affected = append(affected, toSummary(c, 0, "calls "+seedID))
+		}
+	}
+
+	// Phase 6: body-reference fallback for symbols without call edges.
+	bodyCallers, _ := e.store.GetCallersFromBody(sym.Name)
+	for _, c := range bodyCallers {
+		if visited[c.ID] {
+			continue
+		}
+		visited[c.ID] = true
+		affected = append(affected, toSummary(c, 0, "references "+sym.Name+" (heuristic)"))
+	}
+
+	// Classify into layers.
+	for _, s := range affected {
+		layer := classifyLayer(s.File)
+		switch layer {
+		case LayerProto:
+			resp.Proto = append(resp.Proto, s)
+		case LayerGenerated:
+			resp.Generated = append(resp.Generated, s)
+		case LayerTest:
+			resp.Tests = append(resp.Tests, s)
+		default:
+			resp.Implementation = append(resp.Implementation, s)
+		}
+	}
+
+	resp.Total = len(affected)
+	return resp, nil
+}
+
+func classifyLayer(file string) ImpactLayer {
+	if strings.HasSuffix(file, ".proto") {
+		return LayerProto
+	}
+	if isGenerated(file) {
+		return LayerGenerated
+	}
+	if strings.HasSuffix(file, "_test.go") {
+		return LayerTest
+	}
+	return LayerImplementation
+}
+
 // GetCallers returns summaries of all symbols that call the given symbol.
 // Falls back to fuzzy ID resolution if the exact ID is not found.
 // If no call-graph callers exist, checks whether this symbol implements a

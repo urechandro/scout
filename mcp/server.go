@@ -298,6 +298,24 @@ Returns: service name, total RPC count, and for each unimplemented RPC: the prot
 			},
 		},
 		{
+			"name": "get_impact",
+			"description": `Trace what breaks if you change this symbol. Unlike get_callers (one hop, Go-only), this crosses proto↔Go boundaries, follows name-based linkage through generated code, and finds affected tests.
+
+Call this BEFORE renaming a symbol, changing a proto field, or modifying a type — it shows the full blast radius across layers: proto definitions, generated code, hand-written implementations, and tests.
+
+Returns results grouped by layer: proto, generated, implementation, tests. Each entry includes a "why" explaining the connection.`,
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"symbol_id": map[string]any{
+						"type":        "string",
+						"description": "Fully-qualified symbol ID of the symbol you plan to change.",
+					},
+				},
+				"required": []string{"symbol_id"},
+			},
+		},
+		{
 			"name": "get_conventions",
 			"description": `Find how a cross-cutting pattern is used across the codebase. Searches broadly across ALL symbol kinds (functions, methods, types, interfaces) — not just RPCs.
 
@@ -390,7 +408,8 @@ more token-efficient than reading files directly.
 - Do not use Read to open Go files. If you know a file path, derive the symbol ID
   from context results and call get_body instead. Reading whole files defeats the index.
 - Proto files may be read with Read if they are not in the scout index.
-- Before changing a function signature, call get_callers to understand blast radius.
+- Before changing a function signature, call get_impact to understand the full blast
+  radius across proto, generated code, implementations, and tests.
 
 ## Tools
 
@@ -399,7 +418,8 @@ more token-efficient than reading files directly.
 | get_relevant_context(task) | Start of every task |
 | get_conventions(topic) | Before implementing any pattern |
 | get_body(symbol_id) | When about to read or edit a specific symbol |
-| get_callers(symbol_id) | Before changing a signature |
+| get_impact(symbol_id) | Before renaming, changing a type, or modifying a proto field |
+| get_callers(symbol_id) | Before changing a signature (Go-only, single hop) |
 | get_callees(symbol_id) | To understand what a symbol depends on |
 | get_flow(symbol_id) | To understand a symbol in context (body + callers + callees) |
 | get_pattern(task) | To get a full example slice (proto → messages → Go impl) |
@@ -436,6 +456,8 @@ func (s *Server) handleToolsCall(req request) *response {
 		result, err = s.callGetUnimplemented(params.Arguments)
 	case "get_conventions":
 		result, err = s.callGetConventions(params.Arguments)
+	case "get_impact":
+		result, err = s.callGetImpact(params.Arguments)
 	default:
 		return s.errResponse(req.ID, -32601, fmt.Sprintf("unknown tool: %s", params.Name))
 	}
@@ -571,6 +593,19 @@ func (s *Server) callGetConventions(args json.RawMessage) (any, error) {
 		return nil, fmt.Errorf("invalid arguments: %w", err)
 	}
 	return s.engine.GetConventions(params.Topic)
+}
+
+func (s *Server) callGetImpact(args json.RawMessage) (any, error) {
+	var params struct {
+		SymbolID string `json:"symbol_id"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return nil, fmt.Errorf("invalid arguments: %w", err)
+	}
+	if params.SymbolID == "" {
+		return nil, fmt.Errorf("symbol_id is required")
+	}
+	return s.engine.GetImpact(params.SymbolID)
 }
 
 func (s *Server) errResponse(id any, code int, msg string) *response {
