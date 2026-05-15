@@ -29,6 +29,50 @@ func seedSymbols(t *testing.T, s *store.Store, syms []store.Symbol) {
 	}
 }
 
+// --- Query type detection ---
+
+func TestClassifyQuery(t *testing.T) {
+	tests := []struct {
+		task string
+		want queryType
+	}{
+		// Precise: single compound identifiers
+		{"CreateShipmentLeg", queryPrecise},
+		{"shipmentLegSvc", queryPrecise},
+		{"ValidateToken", queryPrecise},
+
+		// Precise: dotted identifiers
+		{"grpc.Dial", queryPrecise},
+		{"status.Error", queryPrecise},
+		{"codes.NotFound", queryPrecise},
+		{"resourcename.Sprint", queryPrecise},
+
+		// Discovery: multi-word natural language
+		{"how does auth work", queryDiscovery},
+		{"find rate limiting", queryDiscovery},
+		{"who calls ValidateToken", queryDiscovery},
+		{"CreateShipmentLeg ShipmentLeg service", queryDiscovery},
+
+		// Discovery: single plain word (no compound/dot)
+		{"auth", queryDiscovery},
+		{"shipment", queryDiscovery},
+
+		// Edge: single uppercase word without case transition
+		{"API", queryDiscovery},
+		{"ID", queryDiscovery},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.task, func(t *testing.T) {
+			got := classifyQuery(tt.task)
+			if got != tt.want {
+				label := map[queryType]string{queryPrecise: "precise", queryDiscovery: "discovery"}
+				t.Errorf("classifyQuery(%q) = %s, want %s", tt.task, label[got], label[tt.want])
+			}
+		})
+	}
+}
+
 // --- Compound identifier detection ---
 
 func TestIsCompoundIdent(t *testing.T) {

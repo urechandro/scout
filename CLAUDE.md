@@ -195,8 +195,10 @@ scout/
   - Phase 1: exact name lookup for compound identifiers (`extractCompoundIdents`
     detects PascalCase/camelCase). Score 3.0 + kindWeight + implBoost + generatedPenalty
   - Phase 2: FTS fallback for remaining discovery. Skipped for precise queries
-    when Phase 1 hit. Position-based score + nameMatchBonus + termCoverage +
-    kindWeight + implBoost + generatedPenalty
+    when Phase 1 hit. Fetches 3× the FTS limit, partitions into source vs
+    generated, caps generated at 5 (or unlimited if no source hits), then
+    scores. Position-based score + nameMatchBonus + termCoverage + kindWeight +
+    implBoost + generatedPenalty
 - **Scoring pipeline**: multi-signal, additive
   - `kindWeight`: methods +0.3, funcs +0.2, interfaces +0.1, structs -0.3
   - `nameMatchBonus`: +1.0 for func/method, +0.7 interface, +0.3 others (skipped
@@ -219,6 +221,8 @@ scout/
 - `buildPackageSummary`: groups returned symbols by directory, strips common path
   prefix for short relative paths, returns per-package hit count + kind breakdown.
   Omitted when results are single-symbol or single-package
+- `prioritizeSource`: reorders ranked results so source symbols come before
+  generated ones, preserving score order within each group
 - `trimToBudget`: greedy fill, ~4 chars per token estimate, budget varies by
   query type (1000 for precise, 4000 for discovery)
 - `buildFTSQuery`: strips stop words, ORs remaining terms. Dynamic FTS limit:

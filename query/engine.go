@@ -134,22 +134,41 @@ func (e *Engine) GetRelevantContext(req ContextRequest) (*ContextResponse, error
 		queryTerms := strings.Split(ftsQuery, " OR ")
 		compoundParts := extractCompoundParts(req.Task)
 		scoringTerms := append(queryTerms, compoundParts...)
+		// Fetch extra to ensure source hits aren't crowded out by generated boilerplate.
 		ftsLimit := 30 + len(queryTerms)*10
-		hits, err := e.store.SearchFTS(ftsQuery, ftsLimit)
+		hits, err := e.store.SearchFTS(ftsQuery, ftsLimit*3)
 		if err != nil {
 			return nil, fmt.Errorf("fts search: %w", err)
 		}
 
-		nameFreq := make(map[string]int, len(hits))
+		// Partition: score source hits first, then fill with generated up to a cap.
+		var sourceHits, genHits []store.Symbol
 		for _, sym := range hits {
+			if isGenerated(sym.File) {
+				genHits = append(genHits, sym)
+			} else {
+				sourceHits = append(sourceHits, sym)
+			}
+		}
+		maxGen := 5
+		if len(sourceHits) == 0 {
+			maxGen = ftsLimit
+		}
+		if len(genHits) > maxGen {
+			genHits = genHits[:maxGen]
+		}
+		filtered := append(sourceHits, genHits...)
+
+		nameFreq := make(map[string]int, len(filtered))
+		for _, sym := range filtered {
 			nameFreq[strings.ToLower(sym.Name)]++
 		}
 
-		for i, sym := range hits {
+		for i, sym := range filtered {
 			if scored[sym.ID] != nil {
 				continue
 			}
-			score := float64(len(hits)-i) / float64(len(hits))
+			score := float64(len(filtered)-i) / float64(len(filtered))
 			nameLower := strings.ToLower(sym.Name)
 			decomposed := strings.ToLower(decomposeIdentifier(sym.Name))
 			if nameFreq[nameLower] < 3 {
@@ -184,6 +203,7 @@ func (e *Engine) GetRelevantContext(req ContextRequest) (*ContextResponse, error
 	}
 
 	ranked := rankSymbols(scored)
+	ranked = prioritizeSource(ranked)
 	kept, truncated := trimToBudget(ranked, req.BudgetTokens)
 
 	return &ContextResponse{
@@ -1332,6 +1352,22 @@ func rankSymbols(scored map[string]*SymbolSummary) []*SymbolSummary {
 	})
 
 	return ranked
+}
+
+// prioritizeSource reorders ranked results so source symbols come before
+// generated ones. Within each group the existing score order is preserved.
+// This prevents generated boilerplate (e.g. _*_Handler gRPC stubs that all
+// match "interceptor") from consuming the token budget before source hits.
+func prioritizeSource(ranked []*SymbolSummary) []*SymbolSummary {
+	var source, generated []*SymbolSummary
+	for _, s := range ranked {
+		if isGenerated(s.File) {
+			generated = append(generated, s)
+		} else {
+			source = append(source, s)
+		}
+	}
+	return append(source, generated...)
 }
 
 func trimToBudget(ranked []*SymbolSummary, budgetTokens int) ([]SymbolSummary, int) {
