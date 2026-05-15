@@ -94,6 +94,14 @@ packages. The server just wires them together.
 binaries via `go install`. The target machine needs Go available because
 `go/packages` shells out to `go list` to resolve types.
 
+**Dependency signatures on demand.** With `--deps`, the indexer walks
+`pkg.Imports` for each target package, collects unique external `*types.Package`
+values (skipping stdlib and target module), and extracts exported symbols from
+their `Scope()`. Only signatures are stored (no bodies). Methods on
+proto-generated dep types are filtered out to avoid boilerplate bloat. This
+keeps the agent in scout's fast path when it encounters imported types like
+`grpc.ClientConn` or `codes.NotFound`.
+
 ## File Structure
 
 ```
@@ -104,6 +112,8 @@ scout/
 ├── indexer/
 │   ├── indexer.go          — Parses Go packages via go/packages, extracts
 │   │                         symbols and call edges, writes to store
+│   ├── deps.go             — Indexes exported signatures from external
+│   │                         dependency packages (--deps flag)
 │   └── conventions.go      — Reads conventions.yaml from the indexed project,
 │                             upserts entries into the conventions table
 ├── protoindexer/
@@ -133,6 +143,19 @@ scout/
   large codebases where some packages may fail to resolve
 - Incremental mode: `RunFiles([]string)` deletes stale symbols for given files
   then re-parses only affected packages
+
+### indexer/deps.go
+- Walks `pkg.Imports` for each loaded target package, collects unique external
+  `*types.Package` values (skips stdlib and target module)
+- Extracts exported symbols from `types.Package.Scope()`: funcs, types
+  (struct/interface/type), consts, vars — signatures only, no bodies
+- For non-proto named types, also indexes exported methods via `Named.NumMethods()`
+- Proto-generated dep types (detected via `isProtoGenerated` on file path) skip
+  method indexing to avoid boilerplate bloat (Reset, ProtoMessage, etc.)
+- File paths point to Go module cache (`~/go/pkg/mod/...`)
+- Uses same `qualifiedID` format as call graph edges, so existing edges
+  from target code to dep functions now resolve to real symbols
+- `detectModulePath` reads `go.mod` to determine target module prefix
 
 ### indexer/conventions.go
 - Looks for `conventions.yaml` or `conventions.yml` in the indexed project root
@@ -236,10 +259,6 @@ Tested on a production Go codebase (~14k symbols, 78% generated). Key findings:
 ## Known Issues / Next Steps
 
 ### High value
-- **External dependency indexing** — scout only indexes the target codebase.
-  Symbols from imported packages (e.g. `einride/protobuf-*`) are not in the
-  index. When Claude needs to understand an imported type, it falls back to
-  grep/Read.
 - **"Find simplest example" queries** — "which RPC has the fewest dependencies?"
   isn't expressible in the current tool set. The model has to call get_pattern
   on several RPCs and compare manually.
@@ -267,6 +286,16 @@ go install github.com/urechandro/scout/cmd/scout-server@latest
 ```sh
 scout-index --db /your/project/.scout/index.db --root /your/project
 ```
+
+### Full index with dependency signatures
+```sh
+scout-index --db /your/project/.scout/index.db --root /your/project --deps
+```
+
+`--deps` indexes exported signatures (no bodies) from external dependency
+packages. This makes imported types like `grpc.ClientConn`, `codes.NotFound`,
+and SDK types discoverable via FTS and exact name lookup. Proto-generated dep
+methods are filtered out to avoid boilerplate bloat.
 
 ### Incremental reindex
 ```sh

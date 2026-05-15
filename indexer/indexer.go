@@ -47,6 +47,8 @@ type Config struct {
 	// "rta" (default) or "cha". Empty string falls back to "rta".
 	// AST-based resolution is always used for incremental (RunFiles) mode.
 	CallGraph CallGraphMethod
+	// IndexDeps indexes exported signatures from external dependency packages.
+	IndexDeps bool
 }
 
 // Indexer parses Go packages and writes symbols and edges to a Store.
@@ -97,6 +99,12 @@ func (idx *Indexer) Run() error {
 	}
 
 	log.Printf("indexed %d packages (%d skipped as generated)", len(indexable), skipped)
+
+	if idx.cfg.IndexDeps {
+		if err := idx.indexDependencies(pkgs); err != nil {
+			return fmt.Errorf("index dependencies: %w", err)
+		}
+	}
 
 	// Build SSA call graph and write call edges to the store.
 	if idx.useSSAEdges {

@@ -25,6 +25,7 @@ func main() {
 	excludeGenerated := flag.Bool("exclude-generated", true, "Skip generated files and directories (gen, vendor, *.pb.go, etc).")
 	exclude := flag.String("exclude", "", "Comma-separated package path substrings to skip, e.g. cmd/localserver,cmd/migration.")
 	method := flag.String("method", "rta", "Call graph algorithm: rta (precise, default) or cha (fast, conservative). Only used for full index.")
+	deps := flag.Bool("deps", false, "Index exported signatures from external dependency packages.")
 	flag.Parse()
 
 	s, err := store.New(*dbPath)
@@ -71,6 +72,7 @@ func main() {
 			ExcludeGenerated: *excludeGenerated,
 			ExcludePaths:     excludePaths,
 			CallGraph:        cgMethod,
+			IndexDeps:        *deps,
 		}
 		idx := indexer.New(cfg, s)
 
