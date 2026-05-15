@@ -274,6 +274,26 @@ The task should describe the kind of operation: "create shipment", "update trans
 			},
 		},
 		{
+			"name": "get_unimplemented",
+			"description": `Find which RPCs in a proto service are missing or stubbed in the Go server implementation.
+
+Call this BEFORE adding a new RPC to a service — it tells you exactly which RPCs still need implementing, with their proto signatures and request/response message names.
+
+Accepts full or partial service names: "ShipmentService", "shipment.v1.ShipmentService", etc.
+
+Returns: service name, total RPC count, and for each unimplemented RPC: the proto signature, file location, request/response message names, and whether it's completely missing or just stubbed (returns codes.Unimplemented).`,
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"service": map[string]any{
+						"type":        "string",
+						"description": "Proto service name (full or partial). Examples: 'ShipmentService', 'shipment.v1.ShipmentService'.",
+					},
+				},
+				"required": []string{"service"},
+			},
+		},
+		{
 			"name": "get_conventions",
 			"description": `Find how a cross-cutting pattern is used across the codebase. Searches broadly across ALL symbol kinds (functions, methods, types, interfaces) — not just RPCs.
 
@@ -379,6 +399,7 @@ more token-efficient than reading files directly.
 | get_callees(symbol_id) | To understand what a symbol depends on |
 | get_flow(symbol_id) | To understand a symbol in context (body + callers + callees) |
 | get_pattern(task) | To get a full example slice (proto → messages → Go impl) |
+| get_unimplemented(service) | Before adding a new RPC — shows what's missing or stubbed |
 `
 
 func (s *Server) handleToolsCall(req request) *response {
@@ -407,6 +428,8 @@ func (s *Server) handleToolsCall(req request) *response {
 		result, err = s.callGetFlow(params.Arguments)
 	case "get_pattern":
 		result, err = s.callGetPattern(params.Arguments)
+	case "get_unimplemented":
+		result, err = s.callGetUnimplemented(params.Arguments)
 	case "get_conventions":
 		result, err = s.callGetConventions(params.Arguments)
 	default:
@@ -521,6 +544,19 @@ func (s *Server) callGetPattern(args json.RawMessage) (any, error) {
 		return nil, fmt.Errorf("invalid arguments: %w", err)
 	}
 	return s.engine.GetPattern(params.Task)
+}
+
+func (s *Server) callGetUnimplemented(args json.RawMessage) (any, error) {
+	var params struct {
+		Service string `json:"service"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return nil, fmt.Errorf("invalid arguments: %w", err)
+	}
+	if params.Service == "" {
+		return nil, fmt.Errorf("service is required")
+	}
+	return s.engine.GetUnimplemented(params.Service)
 }
 
 func (s *Server) callGetConventions(args json.RawMessage) (any, error) {

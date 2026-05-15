@@ -736,6 +736,136 @@ func (e *Engine) GetFlow(symbolID string) (*FlowResponse, error) {
 	return resp, nil
 }
 
+// UnimplementedResponse is returned by GetUnimplemented.
+type UnimplementedResponse struct {
+	Service       string             `json:"service"`
+	ServiceID     string             `json:"service_id"`
+	TotalRPCs     int                `json:"total_rpcs"`
+	Implemented   int                `json:"implemented"`
+	Unimplemented []UnimplementedRPC `json:"unimplemented"`
+	Hint          string             `json:"hint,omitempty"`
+}
+
+// UnimplementedRPC describes one proto RPC missing or stubbed in the Go server.
+type UnimplementedRPC struct {
+	Name            string `json:"name"`
+	Signature       string `json:"signature"`
+	File            string `json:"file"`
+	LineStart       int    `json:"line_start"`
+	RequestMessage  string `json:"request_message"`
+	ResponseMessage string `json:"response_message"`
+	Status          string `json:"status"` // "missing" or "stubbed"
+}
+
+// GetUnimplemented finds RPCs defined in a proto service that are missing or
+// stubbed in the Go server implementation.
+func (e *Engine) GetUnimplemented(service string) (*UnimplementedResponse, error) {
+	// Phase 1: resolve the service symbol.
+	svc, hint, err := e.resolveService(service)
+	if err != nil {
+		return nil, err
+	}
+
+	// Phase 2: get all RPCs for this service.
+	rpcs, err := e.store.GetChildrenByIDPrefix(svc.ID, "rpc")
+	if err != nil {
+		return nil, fmt.Errorf("get rpcs for %s: %w", svc.ID, err)
+	}
+
+	resp := &UnimplementedResponse{
+		Service:   svc.Name,
+		ServiceID: svc.ID,
+		TotalRPCs: len(rpcs),
+		Hint:      hint,
+	}
+
+	// Phase 3: check each RPC for a Go implementation.
+	for _, rpc := range rpcs {
+		methods, _ := e.store.GetByNameAndKind(rpc.Name, "method")
+		impl := preferSvcMethod(methods)
+
+		reqMsg, respMsg := parseRPCMessages(rpc.Signature)
+
+		if impl == nil {
+			resp.Unimplemented = append(resp.Unimplemented, UnimplementedRPC{
+				Name:            rpc.Name,
+				Signature:       rpc.Signature,
+				File:            rpc.File,
+				LineStart:       rpc.LineStart,
+				RequestMessage:  reqMsg,
+				ResponseMessage: respMsg,
+				Status:          "missing",
+			})
+			continue
+		}
+
+		// Check if the implementation is just a stub.
+		body := impl.Body
+		if isLineRef(body) {
+			body, _ = readLines(impl.File, impl.LineStart, impl.LineEnd)
+		}
+		if isStubbedBody(body) {
+			resp.Unimplemented = append(resp.Unimplemented, UnimplementedRPC{
+				Name:            rpc.Name,
+				Signature:       rpc.Signature,
+				File:            rpc.File,
+				LineStart:       rpc.LineStart,
+				RequestMessage:  reqMsg,
+				ResponseMessage: respMsg,
+				Status:          "stubbed",
+			})
+			continue
+		}
+
+		resp.Implemented++
+	}
+
+	return resp, nil
+}
+
+// resolveService finds a proto service symbol by exact name, fuzzy match, or FTS.
+func (e *Engine) resolveService(service string) (*store.Symbol, string, error) {
+	// Try exact name match first.
+	syms, err := e.store.GetByNameAndKind(service, "service")
+	if err == nil && len(syms) == 1 {
+		return &syms[0], "", nil
+	}
+	if err == nil && len(syms) > 1 {
+		hint := fmt.Sprintf("Multiple services named %q. Showing first. Others:", service)
+		for _, s := range syms[1:] {
+			hint += " " + s.ID
+		}
+		return &syms[0], hint, nil
+	}
+
+	// Try fuzzy lookup.
+	sym, _, err := e.store.FuzzyGetSymbol(service)
+	if err == nil && sym.Kind == "service" {
+		return sym, "", nil
+	}
+
+	// Try FTS.
+	ftsQuery := buildFTSQuery(service)
+	hits, err := e.store.SearchFTSByKinds(ftsQuery, []string{"service"}, 5)
+	if err == nil && len(hits) > 0 {
+		hint := ""
+		if len(hits) > 1 {
+			hint = fmt.Sprintf("Multiple services matched. Showing %q. Others:", hits[0].Name)
+			for _, h := range hits[1:] {
+				hint += " " + h.ID
+			}
+		}
+		return &hits[0], hint, nil
+	}
+
+	return nil, "", fmt.Errorf("no service found matching %q", service)
+}
+
+// isStubbedBody checks whether a method body is just a gRPC unimplemented stub.
+func isStubbedBody(body string) bool {
+	return strings.Contains(body, "codes.Unimplemented")
+}
+
 func (e *Engine) expand(seeds map[string]*SymbolSummary, depth int) (map[string]*SymbolSummary, error) {
 	result := make(map[string]*SymbolSummary)
 	visited := make(map[string]bool, len(seeds))

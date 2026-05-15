@@ -55,6 +55,7 @@ your codebase (.go + .proto files)
 | `get_flow(symbol_id)` | Full source of a symbol plus caller/callee summaries in one call. Use instead of separate get_body + get_callers + get_callees. |
 | `get_callers(symbol_id)` | Everything that calls this symbol. Falls back to interface/RPC lookup and body-reference heuristics when call graph edges are missing. |
 | `get_callees(symbol_id)` | Everything this symbol depends on. Falls back to body-reference extraction. |
+| `get_unimplemented(service)` | Diff a proto service against Go server methods. Returns which RPCs are missing or stubbed (`codes.Unimplemented`). Call before adding a new RPC. |
 | `get_conventions(topic)` | Look up a documented architectural pattern by topic (e.g. "pagination", "auth", "event handler"). Returns the pattern description, pseudocode structure, and resolved example symbols. Falls back to FTS if no convention matches. |
 
 ## Design Decisions
@@ -214,9 +215,6 @@ Tested on a production Go codebase (~14k symbols, 78% generated). Key findings:
 ## Known Issues / Next Steps
 
 ### High value
-- **`get_unimplemented(service)`** — diff proto service definition against Go
-  server struct, return which RPCs are missing or stubbed. Gap-filling tasks
-  need to know what doesn't exist yet before they can add it.
 - **External dependency indexing** — scout only indexes the target codebase.
   Symbols from imported packages (e.g. `einride/protobuf-*`) are not in the
   index. When Claude needs to understand an imported type, it falls back to

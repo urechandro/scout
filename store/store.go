@@ -473,6 +473,19 @@ func (s *Store) GetByNameAndKind(name, kind string) ([]Symbol, error) {
 	return scanSymbols(rows)
 }
 
+// GetChildrenByIDPrefix returns symbols whose ID starts with prefix + "." and matches the given kind.
+func (s *Store) GetChildrenByIDPrefix(prefix string, kind string) ([]Symbol, error) {
+	rows, err := s.db.Query(`
+		SELECT id, package, name, kind, signature, docstring, file, line_start, line_end, body
+		FROM symbols WHERE id LIKE ? AND kind = ?
+	`, prefix+".%", kind)
+	if err != nil {
+		return nil, fmt.Errorf("get children by prefix %s: %w", prefix, err)
+	}
+	defer rows.Close()
+	return scanSymbols(rows)
+}
+
 // GetByKind returns all symbols with the given kind.
 func (s *Store) GetByKind(kind string) ([]Symbol, error) {
 	rows, err := s.db.Query(`

@@ -1,6 +1,7 @@
 package query
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -412,6 +413,180 @@ func TestGetRelevantContext_FTSFallback(t *testing.T) {
 	}
 	if !ids["myapp/auth.ValidateToken"] {
 		t.Error("expected ValidateToken in FTS results")
+	}
+}
+
+// --- GetUnimplemented ---
+
+func TestGetUnimplemented_MissingRPC(t *testing.T) {
+	s := newTestStore(t)
+	seedSymbols(t, s, []store.Symbol{
+		{
+			ID: "shipment.v1.ShipmentService", Package: "shipment.v1",
+			Name: "ShipmentService", Kind: "service",
+			Signature: "service ShipmentService",
+			File: "/proto/shipment.proto", LineStart: 5, LineEnd: 10,
+		},
+		{
+			ID: "shipment.v1.ShipmentService.CreateShipment", Package: "shipment.v1",
+			Name: "CreateShipment", Kind: "rpc",
+			Signature: "rpc CreateShipment(CreateShipmentRequest) returns (Shipment)",
+			File: "/proto/shipment.proto", LineStart: 6, LineEnd: 6,
+		},
+		{
+			ID: "shipment.v1.ShipmentService.GetShipment", Package: "shipment.v1",
+			Name: "GetShipment", Kind: "rpc",
+			Signature: "rpc GetShipment(GetShipmentRequest) returns (Shipment)",
+			File: "/proto/shipment.proto", LineStart: 7, LineEnd: 7,
+		},
+		{
+			ID: "shipment.v1.ShipmentService.DeleteShipment", Package: "shipment.v1",
+			Name: "DeleteShipment", Kind: "rpc",
+			Signature: "rpc DeleteShipment(DeleteShipmentRequest) returns (Empty)",
+			File: "/proto/shipment.proto", LineStart: 8, LineEnd: 8,
+		},
+		// Only CreateShipment has a Go implementation.
+		{
+			ID: "myapp/svc.Server.CreateShipment", Package: "myapp/svc",
+			Name: "CreateShipment", Kind: "method",
+			Signature: "func (s *Server) CreateShipment(ctx context.Context, req *CreateShipmentRequest) (*Shipment, error)",
+			File: "/svc/server.go", LineStart: 10, LineEnd: 50,
+			Body: "func (s *Server) CreateShipment(ctx context.Context, req *CreateShipmentRequest) (*Shipment, error) {\n\treturn &Shipment{}, nil\n}",
+		},
+	})
+
+	engine := New(s)
+	resp, err := engine.GetUnimplemented("ShipmentService")
+	if err != nil {
+		t.Fatalf("GetUnimplemented: %v", err)
+	}
+
+	if resp.Service != "ShipmentService" {
+		t.Errorf("Service = %q, want ShipmentService", resp.Service)
+	}
+	if resp.TotalRPCs != 3 {
+		t.Errorf("TotalRPCs = %d, want 3", resp.TotalRPCs)
+	}
+	if resp.Implemented != 1 {
+		t.Errorf("Implemented = %d, want 1", resp.Implemented)
+	}
+	if len(resp.Unimplemented) != 2 {
+		t.Fatalf("Unimplemented = %d, want 2", len(resp.Unimplemented))
+	}
+
+	names := map[string]string{}
+	for _, u := range resp.Unimplemented {
+		names[u.Name] = u.Status
+	}
+	if names["GetShipment"] != "missing" {
+		t.Errorf("GetShipment status = %q, want missing", names["GetShipment"])
+	}
+	if names["DeleteShipment"] != "missing" {
+		t.Errorf("DeleteShipment status = %q, want missing", names["DeleteShipment"])
+	}
+
+	// Check request/response messages are parsed.
+	for _, u := range resp.Unimplemented {
+		if u.RequestMessage == "" {
+			t.Errorf("%s: missing request message", u.Name)
+		}
+		if u.ResponseMessage == "" {
+			t.Errorf("%s: missing response message", u.Name)
+		}
+	}
+}
+
+func TestGetUnimplemented_StubbedRPC(t *testing.T) {
+	s := newTestStore(t)
+	dir := t.TempDir()
+
+	// Write a stub Go file so readLines can find it.
+	stubBody := `func (s *Server) CreateShipment(ctx context.Context, req *CreateShipmentRequest) (*Shipment, error) {
+	return nil, status.Errorf(codes.Unimplemented, "CreateShipment not implemented")
+}`
+	stubPath := filepath.Join(dir, "server.go")
+	os.WriteFile(stubPath, []byte(stubBody), 0644)
+
+	seedSymbols(t, s, []store.Symbol{
+		{
+			ID: "test.v1.TestService", Package: "test.v1",
+			Name: "TestService", Kind: "service",
+			Signature: "service TestService",
+			File: "/proto/test.proto", LineStart: 1, LineEnd: 5,
+		},
+		{
+			ID: "test.v1.TestService.CreateShipment", Package: "test.v1",
+			Name: "CreateShipment", Kind: "rpc",
+			Signature: "rpc CreateShipment(CreateShipmentRequest) returns (Shipment)",
+			File: "/proto/test.proto", LineStart: 2, LineEnd: 2,
+		},
+		{
+			ID: "myapp/svc.Server.CreateShipment", Package: "myapp/svc",
+			Name: "CreateShipment", Kind: "method",
+			Signature: "func (s *Server) CreateShipment(ctx context.Context, req *CreateShipmentRequest) (*Shipment, error)",
+			File: stubPath, LineStart: 1, LineEnd: 3,
+			Body: fmt.Sprintf("/* %s:1-3 */", stubPath),
+		},
+	})
+
+	engine := New(s)
+	resp, err := engine.GetUnimplemented("TestService")
+	if err != nil {
+		t.Fatalf("GetUnimplemented: %v", err)
+	}
+
+	if len(resp.Unimplemented) != 1 {
+		t.Fatalf("expected 1 unimplemented, got %d", len(resp.Unimplemented))
+	}
+	if resp.Unimplemented[0].Status != "stubbed" {
+		t.Errorf("status = %q, want stubbed", resp.Unimplemented[0].Status)
+	}
+}
+
+func TestGetUnimplemented_FullyImplemented(t *testing.T) {
+	s := newTestStore(t)
+	seedSymbols(t, s, []store.Symbol{
+		{
+			ID: "test.v1.Svc", Package: "test.v1",
+			Name: "Svc", Kind: "service",
+			Signature: "service Svc",
+			File: "/proto/test.proto", LineStart: 1, LineEnd: 5,
+		},
+		{
+			ID: "test.v1.Svc.Ping", Package: "test.v1",
+			Name: "Ping", Kind: "rpc",
+			Signature: "rpc Ping(PingRequest) returns (PingResponse)",
+			File: "/proto/test.proto", LineStart: 2, LineEnd: 2,
+		},
+		{
+			ID: "myapp/svc.Server.Ping", Package: "myapp/svc",
+			Name: "Ping", Kind: "method",
+			Signature: "func (s *Server) Ping(ctx context.Context, req *PingRequest) (*PingResponse, error)",
+			File: "/svc/server.go", LineStart: 1, LineEnd: 5,
+			Body: "func (s *Server) Ping(ctx context.Context, req *PingRequest) (*PingResponse, error) {\n\treturn &PingResponse{}, nil\n}",
+		},
+	})
+
+	engine := New(s)
+	resp, err := engine.GetUnimplemented("Svc")
+	if err != nil {
+		t.Fatalf("GetUnimplemented: %v", err)
+	}
+
+	if len(resp.Unimplemented) != 0 {
+		t.Errorf("expected 0 unimplemented, got %d", len(resp.Unimplemented))
+	}
+	if resp.Implemented != 1 {
+		t.Errorf("Implemented = %d, want 1", resp.Implemented)
+	}
+}
+
+func TestGetUnimplemented_ServiceNotFound(t *testing.T) {
+	s := newTestStore(t)
+	engine := New(s)
+	_, err := engine.GetUnimplemented("NonexistentService")
+	if err == nil {
+		t.Error("expected error for nonexistent service")
 	}
 }
 
