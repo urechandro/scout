@@ -611,16 +611,32 @@ func (e *Engine) buildSlice(rpc store.Symbol, withBodies bool) (*PatternSlice, e
 
 	if reqName != "" {
 		if sym, err := e.store.GetByNameAndKind(reqName, "message"); err == nil && len(sym) > 0 {
+			var body string
+			if withBodies {
+				body = sym[0].Body
+				if isLineRef(body) {
+					body, _ = readLines(sym[0].File, sym[0].LineStart, sym[0].LineEnd)
+				}
+			}
 			slice.RequestMessage = &SymbolWithBody{
 				SymbolSummary: toSummary(sym[0], 0, "request message"),
+				Body:          body,
 			}
 		}
 	}
 
 	if respName != "" && respName != reqName {
 		if sym, err := e.store.GetByNameAndKind(respName, "message"); err == nil && len(sym) > 0 {
+			var body string
+			if withBodies {
+				body = sym[0].Body
+				if isLineRef(body) {
+					body, _ = readLines(sym[0].File, sym[0].LineStart, sym[0].LineEnd)
+				}
+			}
 			slice.ResponseMessage = &SymbolWithBody{
 				SymbolSummary: toSummary(sym[0], 0, "response message"),
+				Body:          body,
 			}
 		}
 	}
