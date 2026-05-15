@@ -480,40 +480,51 @@ func (e *Engine) GetConventions(topic string) (*ConventionResult, error) {
 }
 
 func (e *Engine) getPatternSlices(task string, limit int) ([]*PatternSlice, error) {
-	// Search for RPC symbols matching the task.
 	ftsQuery := buildFTSQuery(task)
-	hits, err := e.store.SearchFTS(ftsQuery, 20)
-	if err != nil {
-		return nil, fmt.Errorf("fts search: %w", err)
+	queryTerms := strings.Split(ftsQuery, " OR ")
+
+	type scored struct {
+		sym   store.Symbol
+		score float64
 	}
 
-	// Prefer RPC hits; fall back to method hits in svc packages.
-	var rpcs, svcMethods, otherMethods []store.Symbol
-	for _, h := range hits {
-		switch h.Kind {
-		case "rpc":
-			rpcs = append(rpcs, h)
-		case "method":
-			if strings.Contains(h.Package, "svc") || strings.Contains(h.Package, "server") || strings.Contains(h.Package, "service") {
-				svcMethods = append(svcMethods, h)
+	scoreAndRank := func(hits []store.Symbol) []scored {
+		var out []scored
+		for _, h := range hits {
+			decomposed := strings.ToLower(decomposeIdentifier(h.Name))
+			s := termCoverage(h, queryTerms, decomposed) + implBoost(h) + generatedPenalty(h)
+			out = append(out, scored{sym: h, score: s})
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].score > out[j].score })
+		return out
+	}
+
+	// Search RPCs first (the primary target of get_pattern).
+	rpcs, _ := e.store.SearchFTSByKinds(ftsQuery, []string{"rpc"}, 20)
+	candidates := scoreAndRank(rpcs)
+
+	// Fall back to svc methods, then any method.
+	if len(candidates) == 0 {
+		methods, _ := e.store.SearchFTSByKinds(ftsQuery, []string{"method"}, 30)
+		var svc, other []store.Symbol
+		for _, m := range methods {
+			pkg := strings.ToLower(m.Package)
+			if strings.Contains(pkg, "svc") || strings.Contains(pkg, "server") || strings.Contains(pkg, "service") {
+				svc = append(svc, m)
 			} else {
-				otherMethods = append(otherMethods, h)
+				other = append(other, m)
 			}
+		}
+		if len(svc) > 0 {
+			candidates = scoreAndRank(svc)
+		} else {
+			candidates = scoreAndRank(other)
 		}
 	}
 
-	// Cascade: RPCs → svc methods → other methods.
-	candidates := rpcs
-	if len(candidates) == 0 {
-		candidates = svcMethods
-	}
-	if len(candidates) == 0 {
-		candidates = otherMethods
-	}
 	if len(candidates) == 0 {
 		return nil, nil
 	}
-
 	if len(candidates) > limit {
 		candidates = candidates[:limit]
 	}
@@ -522,8 +533,8 @@ func (e *Engine) getPatternSlices(task string, limit int) ([]*PatternSlice, erro
 	withBodies := limit == 1
 
 	var slices []*PatternSlice
-	for _, rpc := range candidates {
-		slice, err := e.buildSlice(rpc, withBodies)
+	for _, c := range candidates {
+		slice, err := e.buildSlice(c.sym, withBodies)
 		if err != nil {
 			return nil, err
 		}

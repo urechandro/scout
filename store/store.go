@@ -238,6 +238,31 @@ func (s *Store) SearchFTS(query string, limit int) ([]Symbol, error) {
 	return scanSymbols(rows)
 }
 
+// SearchFTSByKinds performs full-text search filtered to specific symbol kinds.
+func (s *Store) SearchFTSByKinds(query string, kinds []string, limit int) ([]Symbol, error) {
+	placeholders := make([]string, len(kinds))
+	args := make([]any, 0, len(kinds)+2)
+	args = append(args, query)
+	for i, k := range kinds {
+		placeholders[i] = "?"
+		args = append(args, k)
+	}
+	args = append(args, limit)
+	rows, err := s.db.Query(fmt.Sprintf(`
+		SELECT s.id, s.package, s.name, s.kind, s.signature, s.docstring, s.file, s.line_start, s.line_end, s.body
+		FROM symbols_fts f
+		JOIN symbols s ON s.id = f.id
+		WHERE symbols_fts MATCH ? AND s.kind IN (%s)
+		LIMIT ?
+	`, strings.Join(placeholders, ",")), args...)
+	if err != nil {
+		return nil, fmt.Errorf("fts search %q by kinds: %w", query, err)
+	}
+	defer rows.Close()
+
+	return scanSymbols(rows)
+}
+
 // GetSymbol retrieves a single symbol by its fully-qualified ID.
 func (s *Store) GetSymbol(id string) (*Symbol, error) {
 	row := s.db.QueryRow(`
