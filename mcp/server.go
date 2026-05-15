@@ -165,7 +165,9 @@ If the result is empty or does not contain what you expected: accept that the sy
 
 Use specific Go names when you know them ("ValidateToken", "ShipmentService"). Use domain terms when exploring ("rate limiting", "auth middleware"). The search matches against symbol names, signatures, and docstrings.
 
-Returns at most budget_tokens worth of summaries. Each result includes a symbol_id you can pass to get_body, get_callers, or get_flow.`,
+Returns at most budget_tokens worth of summaries. Each result includes a symbol_id you can pass to get_body, get_callers, or get_flow.
+
+When results span multiple packages, the response includes a "packages" field summarizing hit counts per package — read this first to orient before drilling into individual symbols.`,
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{

@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -36,8 +37,16 @@ type SymbolSummary struct {
 	Score     float64 `json:"score"`
 }
 
+// PackageHit summarizes how many symbols matched in a given package.
+type PackageHit struct {
+	Package string `json:"package"`
+	Count   int    `json:"count"`
+	Kinds   string `json:"kinds"`
+}
+
 // ContextResponse is returned by GetRelevantContext.
 type ContextResponse struct {
+	Packages  []PackageHit    `json:"packages,omitempty"`
 	Symbols   []SymbolSummary `json:"symbols"`
 	Truncated int             `json:"truncated"`
 }
@@ -136,6 +145,7 @@ func (e *Engine) GetRelevantContext(req ContextRequest) (*ContextResponse, error
 	kept, truncated := trimToBudget(ranked, req.BudgetTokens)
 
 	return &ContextResponse{
+		Packages:  buildPackageSummary(kept),
 		Symbols:   kept,
 		Truncated: truncated,
 	}, nil
@@ -1087,6 +1097,85 @@ func trimToBudget(ranked []*SymbolSummary, budgetTokens int) ([]SymbolSummary, i
 	}
 
 	return kept, 0
+}
+
+func buildPackageSummary(symbols []SymbolSummary) []PackageHit {
+	if len(symbols) <= 1 {
+		return nil
+	}
+
+	type pkgInfo struct {
+		count int
+		kinds map[string]int
+	}
+	pkgs := map[string]*pkgInfo{}
+	var order []string
+
+	for _, s := range symbols {
+		dir := filepath.Dir(s.File)
+		info := pkgs[dir]
+		if info == nil {
+			info = &pkgInfo{kinds: map[string]int{}}
+			pkgs[dir] = info
+			order = append(order, dir)
+		}
+		info.count++
+		info.kinds[s.Kind]++
+	}
+
+	if len(pkgs) <= 1 {
+		return nil
+	}
+
+	prefix := commonPrefix(order)
+
+	sort.Slice(order, func(i, j int) bool {
+		return pkgs[order[i]].count > pkgs[order[j]].count
+	})
+
+	hits := make([]PackageHit, len(order))
+	for i, dir := range order {
+		info := pkgs[dir]
+		short := strings.TrimPrefix(dir, prefix)
+		if short == "" {
+			short = "."
+		}
+		var kindParts []string
+		for k, n := range info.kinds {
+			if n > 1 {
+				kindParts = append(kindParts, fmt.Sprintf("%d %ss", n, k))
+			} else {
+				kindParts = append(kindParts, k)
+			}
+		}
+		sort.Strings(kindParts)
+		hits[i] = PackageHit{
+			Package: short,
+			Count:   info.count,
+			Kinds:   strings.Join(kindParts, ", "),
+		}
+	}
+
+	return hits
+}
+
+func commonPrefix(paths []string) string {
+	if len(paths) == 0 {
+		return ""
+	}
+	prefix := paths[0]
+	for _, p := range paths[1:] {
+		for !strings.HasPrefix(p, prefix) {
+			prefix = filepath.Dir(prefix)
+			if prefix == "." || prefix == "/" {
+				return ""
+			}
+		}
+	}
+	if !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
+	}
+	return prefix
 }
 
 // dedup removes redundant symbols in two passes:
