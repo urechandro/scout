@@ -40,7 +40,7 @@ your codebase (.go + .proto files)
     query engine (FTS search → graph expansion → rank → trim to token budget)
         ↓  JSON-RPC over stdio
     MCP server
-        ↓  .claude/settings.json
+        ↓  .mcp.json
     Claude Code
 ```
 
@@ -96,8 +96,7 @@ scout/
 │   └── server.go           — JSON-RPC 2.0 over stdio, MCP protocol
 ├── scripts/
 │   └── pre-commit          — Git hook for incremental reindex on commit
-├── .claude/
-│   └── settings.json       — Wires MCP server into Claude Code
+├── .mcp.json               — Wires MCP server into Claude Code
 └── go.mod                  — module github.com/urechandro/scout
 ```
 
@@ -171,7 +170,7 @@ implementation → tests in a single query. Prioritised next steps:
   Subcommands: `index`, `browse`, `rebuild`. Flags: `--dir`, `--exclude`.
 - No tests yet.
 - Pre-commit hook not tested end-to-end.
-- `.claude/settings.json` has placeholder path — needs real project path.
+- `.mcp.json` has placeholder path — needs real project path.
 
 ## Dependencies
 
@@ -240,14 +239,16 @@ The indexer loads `conventions.yaml` automatically on every run. Claude calls
 `get_conventions("topic")` to retrieve the pattern before implementing it.
 
 ### Wire up Claude Code
-Add to `.claude/settings.json` in your project root. Claude Code picks it up automatically.
+Add to `.mcp.json` in your project root. Claude Code picks it up automatically.
 
 ```json
 {
   "mcpServers": {
     "scout": {
+      "type": "stdio",
       "command": "server",
-      "args": ["--db", "/your/project/.scout/index.db"]
+      "args": ["--db", "/your/project/.scout/index.db"],
+      "env": {}
     }
   }
 }
