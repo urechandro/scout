@@ -55,12 +55,31 @@ func New(s *store.Store) *Engine {
 // GetRelevantContext is the primary MCP tool entry point.
 func (e *Engine) GetRelevantContext(req ContextRequest) (*ContextResponse, error) {
 	if req.BudgetTokens == 0 {
-		req.BudgetTokens = 6000
+		req.BudgetTokens = 4000
 	}
 	if req.MaxExpansionDepth == 0 {
 		req.MaxExpansionDepth = 1
 	}
 
+	scored := make(map[string]*SymbolSummary)
+
+	// Phase 1: exact name lookups for compound identifiers.
+	// "CreateShipmentLeg ShipmentLeg service" → look up "CreateShipmentLeg"
+	// and "ShipmentLeg" by name directly. These are high-confidence hits.
+	compounds := extractCompoundIdents(req.Task)
+	for _, name := range compounds {
+		syms, err := e.store.GetByName(name)
+		if err != nil {
+			continue
+		}
+		for _, sym := range syms {
+			score := 3.0 + kindWeight(sym) + implBoost(sym) + generatedPenalty(sym)
+			s := toSummary(sym, score, "exact name match")
+			scored[sym.ID] = &s
+		}
+	}
+
+	// Phase 2: FTS for remaining discovery.
 	ftsQuery := buildFTSQuery(req.Task)
 	queryTerms := strings.Split(ftsQuery, " OR ")
 	compoundParts := extractCompoundParts(req.Task)
@@ -71,30 +90,15 @@ func (e *Engine) GetRelevantContext(req ContextRequest) (*ContextResponse, error
 		return nil, fmt.Errorf("fts search: %w", err)
 	}
 
-	// If the query contains compound identifiers (e.g. "CreateShipmentLeg"),
-	// run a targeted search for their decomposed parts and merge results.
-	// This prevents specific identifiers from being drowned by broad terms.
-	if len(compoundParts) > 0 {
-		narrowQuery := strings.Join(compoundParts, " AND ")
-		narrow, _ := e.store.SearchFTS(narrowQuery, 20)
-		seen := make(map[string]bool, len(hits))
-		for _, h := range hits {
-			seen[h.ID] = true
-		}
-		for _, h := range narrow {
-			if !seen[h.ID] {
-				hits = append(hits, h)
-			}
-		}
-	}
-
 	nameFreq := make(map[string]int, len(hits))
 	for _, sym := range hits {
 		nameFreq[strings.ToLower(sym.Name)]++
 	}
 
-	scored := make(map[string]*SymbolSummary, len(hits))
 	for i, sym := range hits {
+		if scored[sym.ID] != nil {
+			continue
+		}
 		score := float64(len(hits)-i) / float64(len(hits))
 		nameLower := strings.ToLower(sym.Name)
 		decomposed := strings.ToLower(decomposeIdentifier(sym.Name))
@@ -499,47 +503,70 @@ func (e *Engine) GetConventions(topic string) (*ConventionResult, error) {
 }
 
 func (e *Engine) getPatternSlices(task string, limit int) ([]*PatternSlice, error) {
-	ftsQuery := buildFTSQuery(task)
-	queryTerms := strings.Split(ftsQuery, " OR ")
-
 	type scored struct {
 		sym   store.Symbol
 		score float64
 	}
 
-	scoreAndRank := func(hits []store.Symbol) []scored {
-		var out []scored
-		for _, h := range hits {
-			decomposed := strings.ToLower(decomposeIdentifier(h.Name))
-			s := termCoverage(h, queryTerms, decomposed) + implBoost(h) + generatedPenalty(h)
-			out = append(out, scored{sym: h, score: s})
-		}
-		sort.Slice(out, func(i, j int) bool { return out[i].score > out[j].score })
-		return out
-	}
+	var candidates []scored
 
-	// Search RPCs first (the primary target of get_pattern).
-	rpcs, _ := e.store.SearchFTSByKinds(ftsQuery, []string{"rpc"}, 20)
-	candidates := scoreAndRank(rpcs)
-
-	// Fall back to svc methods, then any method.
-	if len(candidates) == 0 {
-		methods, _ := e.store.SearchFTSByKinds(ftsQuery, []string{"method"}, 30)
-		var svc, other []store.Symbol
-		for _, m := range methods {
-			pkg := strings.ToLower(m.Package)
-			if strings.Contains(pkg, "svc") || strings.Contains(pkg, "server") || strings.Contains(pkg, "service") {
-				svc = append(svc, m)
-			} else {
-				other = append(other, m)
+	// Phase 1: try exact name lookup for compound identifiers.
+	// "create shipment leg" → look up "CreateShipmentLeg" as an RPC name.
+	for _, name := range extractCompoundIdents(task) {
+		if rpcs, err := e.store.GetByNameAndKind(name, "rpc"); err == nil {
+			for _, r := range rpcs {
+				candidates = append(candidates, scored{sym: r, score: 3.0})
 			}
 		}
-		if len(svc) > 0 {
-			candidates = scoreAndRank(svc)
-		} else {
-			candidates = scoreAndRank(other)
+		if len(candidates) == 0 {
+			if methods, err := e.store.GetByName(name); err == nil {
+				for _, m := range methods {
+					s := implBoost(m) + generatedPenalty(m)
+					candidates = append(candidates, scored{sym: m, score: s})
+				}
+			}
 		}
 	}
+
+	// Phase 2: fall back to FTS if no exact match.
+	if len(candidates) == 0 {
+		ftsQuery := buildFTSQuery(task)
+		queryTerms := strings.Split(ftsQuery, " OR ")
+
+		scoreAndRank := func(hits []store.Symbol) []scored {
+			var out []scored
+			for _, h := range hits {
+				decomposed := strings.ToLower(decomposeIdentifier(h.Name))
+				s := termCoverage(h, queryTerms, decomposed) + implBoost(h) + generatedPenalty(h)
+				out = append(out, scored{sym: h, score: s})
+			}
+			sort.Slice(out, func(i, j int) bool { return out[i].score > out[j].score })
+			return out
+		}
+
+		rpcs, _ := e.store.SearchFTSByKinds(ftsQuery, []string{"rpc"}, 20)
+		candidates = scoreAndRank(rpcs)
+
+		if len(candidates) == 0 {
+			methods, _ := e.store.SearchFTSByKinds(ftsQuery, []string{"method"}, 30)
+			var svc, other []store.Symbol
+			for _, m := range methods {
+				pkg := strings.ToLower(m.Package)
+				if strings.Contains(pkg, "svc") || strings.Contains(pkg, "server") || strings.Contains(pkg, "service") {
+					svc = append(svc, m)
+				} else {
+					other = append(other, m)
+				}
+			}
+			if len(svc) > 0 {
+				candidates = scoreAndRank(svc)
+			} else {
+				candidates = scoreAndRank(other)
+			}
+		}
+	}
+
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].score > candidates[j].score })
 
 	if len(candidates) == 0 {
 		return nil, nil
@@ -1017,6 +1044,25 @@ func buildFTSQuery(task string) string {
 	}
 
 	return strings.Join(terms, " OR ")
+}
+
+// extractCompoundIdents returns raw compound identifiers from the task string
+// (e.g. "CreateShipmentLeg" from "CreateShipmentLeg ShipmentLeg service").
+// These are used for exact name lookups in the symbol table.
+func extractCompoundIdents(task string) []string {
+	var idents []string
+	seen := make(map[string]bool)
+	for _, w := range strings.Fields(task) {
+		// Strip punctuation from edges.
+		w = strings.TrimFunc(w, func(r rune) bool {
+			return !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '.')
+		})
+		if isCompoundIdent(w) && !seen[w] {
+			seen[w] = true
+			idents = append(idents, w)
+		}
+	}
+	return idents
 }
 
 // extractCompoundParts returns the decomposed words from any compound
