@@ -50,6 +50,32 @@ Add to `.mcp.json` in your project root:
 
 If `scout-server` is not on your `$PATH`, use the full path (e.g. `~/go/bin/scout-server`).
 
+Add the following to your project's `CLAUDE.md` so Claude Code uses scout
+tools instead of defaulting to grep/find/Read:
+
+```markdown
+## Scout — codebase navigation (MCP)
+
+Scout is connected via MCP. **Always use scout tools first** — for any question
+about the codebase, any task involving Go or proto code, or any exploration.
+Do not use grep, find, or Read to explore the codebase when scout tools are
+available.
+
+| Situation | Tool |
+|---|---|
+| Any question about the codebase ("how does X work?", "where is Y?") | `get_relevant_context` |
+| "Follow this pattern" or "add a new RPC" | `get_pattern` |
+| Read full source of a specific symbol | `get_body` with symbol ID from a previous result |
+| Understand a symbol's callers/callees with full body | `get_flow` |
+| Before implementing a pattern (outbox, pagination, auth) | `get_conventions` |
+| Read proto files, go.mod, config, non-Go files | `Read` |
+
+- **Start every task or question with a scout tool call.** Not grep. Not find. Not Read.
+- Include specific symbol names in queries (e.g. "CreateShipmentLeg" not "create shipment leg").
+- Use get_body for cross-package lookups. Use Read for files you already know the path to.
+- Before changing a function signature, call get_callers to check blast radius.
+```
+
 ### 3. Inspect the index (optional)
 
 Uses [Datasette](https://datasette.io/) for a browsable UI at http://localhost:8001:
