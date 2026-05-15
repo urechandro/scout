@@ -63,10 +63,29 @@ func (e *Engine) GetRelevantContext(req ContextRequest) (*ContextResponse, error
 
 	ftsQuery := buildFTSQuery(req.Task)
 	queryTerms := strings.Split(ftsQuery, " OR ")
+	compoundParts := extractCompoundParts(req.Task)
+	scoringTerms := append(queryTerms, compoundParts...)
 	ftsLimit := 30 + len(queryTerms)*10
 	hits, err := e.store.SearchFTS(ftsQuery, ftsLimit)
 	if err != nil {
 		return nil, fmt.Errorf("fts search: %w", err)
+	}
+
+	// If the query contains compound identifiers (e.g. "CreateShipmentLeg"),
+	// run a targeted search for their decomposed parts and merge results.
+	// This prevents specific identifiers from being drowned by broad terms.
+	if len(compoundParts) > 0 {
+		narrowQuery := strings.Join(compoundParts, " AND ")
+		narrow, _ := e.store.SearchFTS(narrowQuery, 20)
+		seen := make(map[string]bool, len(hits))
+		for _, h := range hits {
+			seen[h.ID] = true
+		}
+		for _, h := range narrow {
+			if !seen[h.ID] {
+				hits = append(hits, h)
+			}
+		}
 	}
 
 	nameFreq := make(map[string]int, len(hits))
@@ -80,14 +99,14 @@ func (e *Engine) GetRelevantContext(req ContextRequest) (*ContextResponse, error
 		nameLower := strings.ToLower(sym.Name)
 		decomposed := strings.ToLower(decomposeIdentifier(sym.Name))
 		if nameFreq[nameLower] < 3 {
-			for _, term := range queryTerms {
+			for _, term := range scoringTerms {
 				if nameLower == term {
 					score += nameMatchBonus(sym)
 					break
 				}
 			}
 		}
-		score += termCoverage(sym, queryTerms, decomposed)
+		score += termCoverage(sym, scoringTerms, decomposed)
 		score += kindWeight(sym)
 		score += implBoost(sym)
 		score += generatedPenalty(sym)
@@ -769,11 +788,44 @@ func trimToBudget(ranked []*SymbolSummary, budgetTokens int) ([]SymbolSummary, i
 	return kept, 0
 }
 
-// dedup collapses groups of symbols that share the same name. When 3+ symbols
-// have identical names (e.g. Validate on every resource type), only the
-// highest-scored one survives — the rest are dropped. This prevents generated
-// or boilerplate methods from flooding results.
+// dedup removes redundant symbols in two passes:
+//  1. Gen-path dedup: when the same name+kind appears in multiple /gen/
+//     directories, keep only the one in the preferred gen path (backend).
+//  2. Name dedup: when 3+ symbols share a name, keep the highest-scored one.
 func dedup(scored map[string]*SymbolSummary) map[string]*SymbolSummary {
+	// Pass 1: collapse gen-path duplicates.
+	type genKey struct{ name, kind string }
+	genGroups := make(map[genKey][]*SymbolSummary)
+	for _, s := range scored {
+		if !strings.Contains(s.File, "/gen/") {
+			continue
+		}
+		name := s.ID
+		if idx := strings.LastIndex(name, "."); idx >= 0 {
+			name = name[idx+1:]
+		}
+		k := genKey{name, s.Kind}
+		genGroups[k] = append(genGroups[k], s)
+	}
+	for _, group := range genGroups {
+		if len(group) < 2 {
+			continue
+		}
+		// Prefer backend/internal/gen (the importable package).
+		sort.Slice(group, func(i, j int) bool {
+			iBackend := strings.Contains(group[i].File, "backend")
+			jBackend := strings.Contains(group[j].File, "backend")
+			if iBackend != jBackend {
+				return iBackend
+			}
+			return group[i].Score > group[j].Score
+		})
+		for _, s := range group[1:] {
+			delete(scored, s.ID)
+		}
+	}
+
+	// Pass 2: collapse same-name boilerplate (e.g. Validate on every resource type).
 	byName := make(map[string][]*SymbolSummary)
 	for _, s := range scored {
 		name := s.ID
@@ -782,7 +834,6 @@ func dedup(scored map[string]*SymbolSummary) map[string]*SymbolSummary {
 		}
 		byName[name] = append(byName[name], s)
 	}
-
 	for name, group := range byName {
 		if len(group) < 3 {
 			continue
@@ -933,7 +984,7 @@ func isLineRef(body string) bool {
 }
 
 // buildFTSQuery converts a natural language task into an FTS5 query.
-// It strips common stop words and ORs the remaining terms.
+// It strips stop words and ORs remaining terms.
 func buildFTSQuery(task string) string {
 	stop := map[string]bool{
 		"a": true, "an": true, "the": true, "to": true, "for": true,
@@ -966,4 +1017,39 @@ func buildFTSQuery(task string) string {
 	}
 
 	return strings.Join(terms, " OR ")
+}
+
+// extractCompoundParts returns the decomposed words from any compound
+// identifiers (PascalCase/camelCase) in the task string. These are used
+// for scoring (termCoverage) but not added to the FTS query to avoid
+// broadening results.
+func extractCompoundParts(task string) []string {
+	var parts []string
+	seen := make(map[string]bool)
+	for _, w := range strings.Fields(task) {
+		if isCompoundIdent(w) {
+			for _, part := range strings.Fields(decomposeIdentifier(w)) {
+				if !seen[part] {
+					seen[part] = true
+					parts = append(parts, part)
+				}
+			}
+		}
+	}
+	return parts
+}
+
+// isCompoundIdent reports whether s looks like a PascalCase or camelCase
+// identifier with at least two words (e.g. "CreateShipmentLeg", "buildCallGraph").
+func isCompoundIdent(s string) bool {
+	if len(s) < 3 {
+		return false
+	}
+	transitions := 0
+	for i := 1; i < len(s); i++ {
+		if s[i] >= 'A' && s[i] <= 'Z' && s[i-1] >= 'a' && s[i-1] <= 'z' {
+			transitions++
+		}
+	}
+	return transitions > 0
 }
