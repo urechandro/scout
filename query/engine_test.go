@@ -610,6 +610,176 @@ func TestReadLines(t *testing.T) {
 	}
 }
 
+// --- GetBody with references ---
+
+func TestGetBody_References(t *testing.T) {
+	s := newTestStore(t)
+	seedSymbols(t, s, []store.Symbol{
+		{
+			ID: "myapp/svc.Server.CreateShipment", Package: "myapp/svc",
+			Name: "CreateShipment", Kind: "method",
+			Signature: "func (s *Server) CreateShipment(ctx context.Context, req *CreateShipmentRequest) (*Shipment, error)",
+			File: "/svc/server.go", LineStart: 10, LineEnd: 30,
+			Body: `func (s *Server) CreateShipment(ctx context.Context, req *CreateShipmentRequest) (*Shipment, error) {
+	if err := ValidateToken(ctx); err != nil {
+		return nil, err
+	}
+	leg := BuildShipmentLeg(req)
+	return s.repo.Save(ctx, leg)
+}`,
+		},
+		{
+			ID: "myapp/auth.ValidateToken", Package: "myapp/auth",
+			Name: "ValidateToken", Kind: "func",
+			Signature: "func ValidateToken(ctx context.Context) error",
+			File: "/auth/auth.go", LineStart: 1, LineEnd: 10,
+		},
+		{
+			ID: "myapp/builder.BuildShipmentLeg", Package: "myapp/builder",
+			Name: "BuildShipmentLeg", Kind: "func",
+			Signature: "func BuildShipmentLeg(req *CreateShipmentRequest) *ShipmentLeg",
+			File: "/builder/leg.go", LineStart: 1, LineEnd: 15,
+		},
+		{
+			ID: "myapp/model.Shipment", Package: "myapp/model",
+			Name: "Shipment", Kind: "struct",
+			Signature: "type Shipment struct",
+			File: "/model/shipment.go", LineStart: 1, LineEnd: 10,
+		},
+	})
+
+	engine := New(s)
+	resp, err := engine.GetBody("myapp/svc.Server.CreateShipment")
+	if err != nil {
+		t.Fatalf("GetBody: %v", err)
+	}
+
+	if len(resp.References) == 0 {
+		t.Fatal("expected references, got none")
+	}
+
+	refIDs := map[string]bool{}
+	for _, ref := range resp.References {
+		refIDs[ref.ID] = true
+	}
+
+	if !refIDs["myapp/auth.ValidateToken"] {
+		t.Error("expected ValidateToken in references")
+	}
+	if !refIDs["myapp/builder.BuildShipmentLeg"] {
+		t.Error("expected BuildShipmentLeg in references")
+	}
+
+	// Self should not appear.
+	if refIDs["myapp/svc.Server.CreateShipment"] {
+		t.Error("self should not appear in references")
+	}
+
+	// References should have signatures but no bodies.
+	for _, ref := range resp.References {
+		if ref.Signature == "" {
+			t.Errorf("reference %s has empty signature", ref.ID)
+		}
+		if ref.Why != "referenced" {
+			t.Errorf("reference %s has why=%q, want 'referenced'", ref.ID, ref.Why)
+		}
+	}
+}
+
+func TestGetBody_NoReferences_EmptyBody(t *testing.T) {
+	s := newTestStore(t)
+	seedSymbols(t, s, []store.Symbol{
+		{
+			ID: "myapp/model.Shipment", Package: "myapp/model",
+			Name: "Shipment", Kind: "struct",
+			Signature: "type Shipment struct",
+			File: "/model/shipment.go", LineStart: 1, LineEnd: 10,
+			Body: "",
+		},
+	})
+
+	engine := New(s)
+	resp, err := engine.GetBody("myapp/model.Shipment")
+	if err != nil {
+		t.Fatalf("GetBody: %v", err)
+	}
+
+	if len(resp.References) != 0 {
+		t.Errorf("expected no references for empty body, got %d", len(resp.References))
+	}
+}
+
+// --- GetPattern with message bodies ---
+
+func TestGetPattern_MessageBodies(t *testing.T) {
+	s := newTestStore(t)
+	dir := t.TempDir()
+
+	reqBody := "message CreateShipmentRequest {\n  string name = 1;\n  string origin = 2;\n}"
+	reqPath := filepath.Join(dir, "request.proto")
+	os.WriteFile(reqPath, []byte(reqBody), 0644)
+
+	respBody := "message Shipment {\n  string id = 1;\n  string name = 2;\n}"
+	respPath := filepath.Join(dir, "response.proto")
+	os.WriteFile(respPath, []byte(respBody), 0644)
+
+	seedSymbols(t, s, []store.Symbol{
+		{
+			ID: "shipment.v1.ShipmentService.CreateShipment", Package: "shipment.v1",
+			Name: "CreateShipment", Kind: "rpc",
+			Signature: "rpc CreateShipment(CreateShipmentRequest) returns (Shipment)",
+			File: filepath.Join(dir, "shipment.proto"), LineStart: 1, LineEnd: 1,
+		},
+		{
+			ID: "shipment.v1.CreateShipmentRequest", Package: "shipment.v1",
+			Name: "CreateShipmentRequest", Kind: "message",
+			Signature: "message CreateShipmentRequest",
+			File: reqPath, LineStart: 1, LineEnd: 4,
+			Body: fmt.Sprintf("/* %s:1-4 */", reqPath),
+		},
+		{
+			ID: "shipment.v1.Shipment", Package: "shipment.v1",
+			Name: "Shipment", Kind: "message",
+			Signature: "message Shipment",
+			File: respPath, LineStart: 1, LineEnd: 4,
+			Body: fmt.Sprintf("/* %s:1-4 */", respPath),
+		},
+		{
+			ID: "myapp/svc.Server.CreateShipment", Package: "myapp/svc",
+			Name: "CreateShipment", Kind: "method",
+			Signature: "func (s *Server) CreateShipment(ctx context.Context, req *CreateShipmentRequest) (*Shipment, error)",
+			File: "/svc/server.go", LineStart: 10, LineEnd: 30,
+			Body: "func (s *Server) CreateShipment(ctx context.Context, req *CreateShipmentRequest) (*Shipment, error) {\n\treturn &Shipment{}, nil\n}",
+		},
+	})
+
+	engine := New(s)
+	resp, err := engine.GetPattern("CreateShipment")
+	if err != nil {
+		t.Fatalf("GetPattern: %v", err)
+	}
+
+	if resp.RequestMessage == nil {
+		t.Fatal("expected request message, got nil")
+	}
+	if resp.RequestMessage.Body == "" {
+		t.Error("request message body is empty")
+	}
+	if resp.RequestMessage.Body != reqBody {
+		t.Errorf("request message body = %q, want %q", resp.RequestMessage.Body, reqBody)
+	}
+
+	if resp.ResponseMessage == nil {
+		t.Fatal("expected response message, got nil")
+	}
+	if resp.ResponseMessage.Body == "" {
+		t.Error("response message body is empty")
+	}
+	if resp.ResponseMessage.Body != respBody {
+		t.Errorf("response message body = %q, want %q", resp.ResponseMessage.Body, respBody)
+	}
+}
+
 func TestIsLineRef(t *testing.T) {
 	tests := []struct {
 		input string
