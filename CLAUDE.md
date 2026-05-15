@@ -49,7 +49,7 @@ your codebase (.go + .proto files)
 
 | Tool | Purpose |
 |---|---|
-| `get_relevant_context(query)` | Primary tool. Exact name lookup + FTS + graph expansion + ranking. Returns symbol summaries within a 4k token budget. |
+| `get_relevant_context(query)` | Primary tool. Exact name lookup + FTS + graph expansion + ranking. Returns symbol summaries within a 4k token budget. Includes a `packages` field grouping hits by package with counts and kinds when results span multiple packages. |
 | `get_pattern(task)` | Complete vertical slice: proto RPC → request/response messages → Go implementation, with full source bodies. Use before implementing a new RPC. Requires proto indexing; degrades to a single FTS hit otherwise. |
 | `get_body(symbol_id)` | Full source of one symbol plus signatures of referenced types/functions (up to 20). Call only when about to read or edit it. |
 | `get_flow(symbol_id)` | Full source of a symbol plus caller/callee summaries in one call. Use instead of separate get_body + get_callers + get_callees. |
@@ -186,6 +186,9 @@ scout/
   with full bodies for get_pattern, summaries-only for conventions
 - `expand`: BFS over call graph from seeds, depth 1 by default
   - Callers scored 0.4/depth, callees 0.3/depth
+- `buildPackageSummary`: groups returned symbols by directory, strips common path
+  prefix for short relative paths, returns per-package hit count + kind breakdown.
+  Omitted when results are single-symbol or single-package
 - `trimToBudget`: greedy fill, ~4 chars per token estimate, default 4000 tokens
 - `buildFTSQuery`: strips stop words, ORs remaining terms. Dynamic FTS limit:
   `30 + len(queryTerms)*10`
