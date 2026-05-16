@@ -392,6 +392,7 @@ func TestGetRelevantContext_ExactNameLookup(t *testing.T) {
 	resp, err := engine.GetRelevantContext(ContextRequest{
 		Task:         "CreateShipmentLeg",
 		BudgetTokens: 4000,
+		Verbose:      true,
 	})
 	if err != nil {
 		t.Fatalf("GetRelevantContext: %v", err)

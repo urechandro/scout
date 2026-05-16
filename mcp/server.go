@@ -157,15 +157,15 @@ func (s *Server) handleToolsList(req request) *response {
 	tools := []map[string]any{
 		{
 			"name": "get_relevant_context",
-			"description": `Orient yourself before acting. Returns symbol signatures, docstrings, and file locations — NOT full source.
+			"description": `Orient yourself before acting. Returns compact symbol pointers (id, kind, signature, file:line) — NOT full source, NOT docstrings by default.
 
-Workflow: call this ONCE at the start of any task. Read the returned summaries to identify which symbols matter, then call get_body only on the 1-2 symbols you will actually edit. Do NOT call it multiple times with overlapping queries.
+Workflow: call this ONCE at the start of any task. Scan the returned IDs and signatures to identify which symbols matter, then call get_body only on the 1-2 symbols you will actually edit. Do NOT call it multiple times with overlapping queries.
 
 If the result is empty or does not contain what you expected: accept that the symbol does not exist yet. Do NOT fall back to Glob, Read, or file search to verify — an empty result is the answer.
 
 Use specific Go names when you know them ("ValidateToken", "ShipmentService"). Use domain terms when exploring ("rate limiting", "auth middleware"). The search matches against symbol names, signatures, and docstrings.
 
-Returns at most budget_tokens worth of summaries. Each result includes a symbol_id you can pass to get_body, get_callers, or get_flow.
+Returns compact pointers by default. Pass verbose=true only if you need docstrings to decide which symbol to expand. Each result includes an id you can pass to get_body, get_callers, or get_flow.
 
 When results span multiple packages, the response includes a "packages" field summarizing hit counts per package — read this first to orient before drilling into individual symbols.`,
 			"inputSchema": map[string]any{
@@ -177,11 +177,15 @@ When results span multiple packages, the response includes a "packages" field su
 					},
 					"budget_tokens": map[string]any{
 						"type":        "integer",
-						"description": "Max tokens for the response. Default 6000. Use 2000 for narrow lookups, 8000+ for broad exploration.",
+						"description": "Max tokens for the response. Default: 600 (precise) or 2000 (discovery). Brief format is compact so this covers many symbols.",
 					},
 					"max_depth": map[string]any{
 						"type":        "integer",
 						"description": "How many hops to walk the call graph from FTS hits. Default 1. Use 2 if the first call missed implementations (e.g. found the interface but not the server method). Max 3.",
+					},
+					"verbose": map[string]any{
+						"type":        "boolean",
+						"description": "Include docstrings, match reason, and scores in results. Default false (compact format: id, kind, signature, file:line). Use verbose only when you need docstrings to decide which symbol to expand.",
 					},
 				},
 				"required": []string{"query"},
@@ -496,6 +500,7 @@ func (s *Server) callGetRelevantContext(args json.RawMessage) (any, error) {
 		Query        string `json:"query"`
 		BudgetTokens int    `json:"budget_tokens"`
 		MaxDepth     int    `json:"max_depth"`
+		Verbose      bool   `json:"verbose"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return nil, fmt.Errorf("invalid arguments: %w", err)
@@ -516,6 +521,7 @@ func (s *Server) callGetRelevantContext(args json.RawMessage) (any, error) {
 		Task:              params.Query,
 		BudgetTokens:      params.BudgetTokens,
 		MaxExpansionDepth: depth,
+		Verbose:           params.Verbose,
 	})
 }
 

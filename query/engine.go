@@ -17,10 +17,13 @@ type ContextRequest struct {
 	// Task is a natural language description of what the model wants to do.
 	Task string
 	// BudgetTokens is the approximate token budget for the response.
-	// Defaults to 6000 if zero.
+	// Defaults to 1000 (precise) or 2000 (discovery) if zero.
 	BudgetTokens int
 	// MaxExpansionDepth controls graph hop count. 1 is usually right; 0 disables.
 	MaxExpansionDepth int
+	// Verbose includes docstrings, why, and score in results. Default (false)
+	// returns compact pointers: id, kind, signature, file:line.
+	Verbose bool
 }
 
 // SymbolSummary is a trimmed view of a symbol returned to the model.
@@ -32,9 +35,9 @@ type SymbolSummary struct {
 	Docstring string  `json:"docstring,omitempty"`
 	File      string  `json:"file"`
 	LineStart int     `json:"line_start"`
-	LineEnd   int     `json:"line_end"`
-	Why       string  `json:"why"`
-	Score     float64 `json:"score"`
+	LineEnd   int     `json:"line_end,omitempty"`
+	Why       string  `json:"why,omitempty"`
+	Score     float64 `json:"score,omitempty"`
 }
 
 // PackageHit summarizes how many symbols matched in a given package.
@@ -98,9 +101,9 @@ func (e *Engine) GetRelevantContext(req ContextRequest) (*ContextResponse, error
 	if req.BudgetTokens == 0 {
 		switch qtype {
 		case queryPrecise:
-			req.BudgetTokens = 1000
+			req.BudgetTokens = 600
 		default:
-			req.BudgetTokens = 4000
+			req.BudgetTokens = 2000
 		}
 	}
 	if req.MaxExpansionDepth == 0 {
@@ -209,7 +212,15 @@ func (e *Engine) GetRelevantContext(req ContextRequest) (*ContextResponse, error
 
 	ranked := rankSymbols(scored)
 	ranked = prioritizeSource(ranked)
-	kept, truncated := trimToBudget(ranked, req.BudgetTokens)
+	kept, truncated := trimToBudget(ranked, req.BudgetTokens, req.Verbose)
+
+	if !req.Verbose {
+		for i := range kept {
+			kept[i].Docstring = ""
+			kept[i].Why = ""
+			kept[i].Score = 0
+		}
+	}
 
 	return &ContextResponse{
 		Packages:  buildPackageSummary(kept),
@@ -315,8 +326,8 @@ func (e *Engine) extractReferences(sym *store.Symbol) []SymbolSummary {
 		}
 	}
 
-	if len(refs) > 20 {
-		refs = refs[:20]
+	if len(refs) > 10 {
+		refs = refs[:10]
 	}
 	return refs
 }
@@ -1375,12 +1386,18 @@ func prioritizeSource(ranked []*SymbolSummary) []*SymbolSummary {
 	return append(source, generated...)
 }
 
-func trimToBudget(ranked []*SymbolSummary, budgetTokens int) ([]SymbolSummary, int) {
-	// Rough estimate: 1 token ≈ 4 chars. Summaries are ~150-300 chars each.
+func trimToBudget(ranked []*SymbolSummary, budgetTokens int, verbose bool) ([]SymbolSummary, int) {
+	// Rough estimate: 1 token ≈ 4 chars.
 	used := 0
 	var kept []SymbolSummary
 	for _, s := range ranked {
-		cost := (len(s.Signature) + len(s.Docstring) + len(s.ID) + len(s.Why) + 60) / 4
+		var cost int
+		if verbose {
+			cost = (len(s.Signature) + len(s.Docstring) + len(s.ID) + len(s.Why) + 60) / 4
+		} else {
+			// Brief: id + kind + signature + file:line ≈ much smaller
+			cost = (len(s.ID) + len(s.Signature) + len(s.File) + 30) / 4
+		}
 		if used+cost > budgetTokens {
 			return kept, len(ranked) - len(kept)
 		}

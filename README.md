@@ -76,29 +76,23 @@ available.
 
 ### Playbooks by task type
 
-Each playbook is 2 rounds max. After round 2, stop and deliver.
+Each playbook is 2 rounds max. **After each round, stop and ask: "Do I know enough to answer?" If yes, deliver immediately. If you cannot name a specific gap that would change your answer, you know enough.**
 
 **Add new RPC / follow existing pattern:**
-1. `get_unimplemented` to see what's missing, then `get_pattern` with the RPC name
-2. `get_body` on specific methods you're combining (only ones that differ from what `get_pattern` returned)
+1. `get_unimplemented` to confirm it doesn't exist, then `get_pattern` with the closest existing analog (NOT the new RPC name)
+2. *Only if* combining patterns from two RPCs: `get_pattern` on the second analog. Do NOT use `get_relevant_context` to search for the new thing — it doesn't exist yet.
 
 **Explore unfamiliar area ("how does X work?"):**
 1. `get_relevant_context` with domain terms
-2. `get_body` or `get_flow` on 1-2 key symbols from results
+2. *Only if* you need source: `get_body` or `get_flow` on 1-2 key symbols
 
 **Rename / change signature / refactor:**
 1. `get_impact` — gives full blast radius across proto, generated, impl, and test layers in one call
-2. `get_body` on the function itself if you need the source (often `get_impact` already has enough)
+2. *Only if* you need the source: `get_body` on the function itself
 
 **Implement a cross-cutting pattern for the first time:**
 1. `get_conventions` with the pattern name
-2. `get_body` on 1-2 examples from results
-
-### After every round of tool calls: "Do I know enough?"
-
-Before making follow-up Scout calls, ask: **"Do I know enough to answer the user's question?"**
-- If yes → stop exploring and deliver the answer.
-- If no → identify the **specific gap** that would change your answer. If you can't name one, you know enough.
+2. *Only if* examples are unclear: `get_body` on 1-2 examples from results
 
 **When a Scout call returns "not found":** stop. Do NOT fall back to grep/find/Read to chase it down. Either:
 - The symbol is an external dependency → describe it from its signature and move on.
