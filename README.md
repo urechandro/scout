@@ -110,15 +110,15 @@ Do not explore out of anxiety. Extra rounds add tokens without changing the deli
 
 - **Start every task or question with a scout tool call.** Not grep. Not find. Not Read.
 - Include specific symbol names in queries when you have them (e.g. "CreateShipmentLeg" not "create shipment leg").
-- Call get_pattern or get_relevant_context once at the start. Don't retry with rephrased queries.
+- **One `get_relevant_context` per task.** Never call it more than once. If the first call didn't return what you need, use `get_body`/`get_flow`/`get_callers` on a symbol ID from the results — don't retry with rephrased queries.
 - **Follow-up chain: stay in scout.** After get_relevant_context returns symbol IDs:
   - Need source? → `get_body` (NOT Read)
   - Need callers? → `get_callers` (NOT grep)
   - Need callees? → `get_callees` (NOT grep)
   - Need full call context? → `get_flow`
   - Need blast radius? → `get_impact`
-- **Do not use Read on .go or .proto files.** Use get_body with the symbol ID instead. Read is only for non-Go files (go.mod, yaml, config, markdown).
-- **Do not use grep to find callers or usages.** Use get_callers or get_impact instead.
+- **NEVER use Read on .go or .proto files.** This is absolute. Use `get_body` with the symbol ID instead. `Read` is ONLY for non-code files (go.mod, yaml, config, markdown, Makefile).
+- **NEVER use Bash (grep/find/cat) on .go or .proto files.** Use scout tools instead.
 - **Do not chase into external dependencies.** If a symbol comes from an external package (e.g. `saga-toolbox`, `grpc`), its signature from `get_body` is enough. Do NOT grep/find/Read in the Go module cache (`~/go/pkg/mod/`). Describe external calls by their signature and move on.
 - Before changing a function signature, call get_callers to check blast radius.
 ```
