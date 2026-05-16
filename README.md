@@ -61,19 +61,65 @@ about the codebase, any task involving Go or proto code, or any exploration.
 Do not use grep, find, or Read to explore the codebase when scout tools are
 available.
 
+### When to use each tool
+
 | Situation | Tool |
 |---|---|
-| Any question about the codebase ("how does X work?", "where is Y?") | `get_relevant_context` |
+| Any question about the codebase ("how does X work?", "where is Y?", "who calls Z?") | `get_relevant_context` |
 | "Follow this pattern" or "add a new RPC" | `get_pattern` |
 | Read full source of a specific symbol | `get_body` with symbol ID from a previous result |
 | Understand a symbol's callers/callees with full body | `get_flow` |
+| Before renaming, changing a type, or modifying a signature | `get_impact` |
+| Before adding a new RPC (check what's already missing) | `get_unimplemented` |
 | Before implementing a pattern (outbox, pagination, auth) | `get_conventions` |
-| Read go.mod, config, YAML, or other non-code files | `Read` |
+| Read proto files, go.mod, config, non-Go files | `Read` |
+
+### Playbooks by task type
+
+Each playbook is 2 rounds max. After round 2, stop and deliver.
+
+**Add new RPC / follow existing pattern:**
+1. `get_unimplemented` to see what's missing, then `get_pattern` with the RPC name
+2. `get_body` on specific methods you're combining (only ones that differ from what `get_pattern` returned)
+
+**Explore unfamiliar area ("how does X work?"):**
+1. `get_relevant_context` with domain terms
+2. `get_body` or `get_flow` on 1-2 key symbols from results
+
+**Rename / change signature / refactor:**
+1. `get_impact` — gives full blast radius across proto, generated, impl, and test layers in one call
+2. `get_body` on the function itself if you need the source (often `get_impact` already has enough)
+
+**Implement a cross-cutting pattern for the first time:**
+1. `get_conventions` with the pattern name
+2. `get_body` on 1-2 examples from results
+
+### After every round of tool calls: "Do I know enough?"
+
+Before making follow-up Scout calls, ask: **"Do I know enough to answer the user's question?"**
+- If yes → stop exploring and deliver the answer.
+- If no → identify the **specific gap** that would change your answer. If you can't name one, you know enough.
+
+**When a Scout call returns "not found":** stop. Do NOT fall back to grep/find/Read to chase it down. Either:
+- The symbol is an external dependency → describe it from its signature and move on.
+- The symbol doesn't exist → tell the user.
+
+Do not explore out of anxiety. Extra rounds add tokens without changing the deliverable.
+
+### Rules
 
 - **Start every task or question with a scout tool call.** Not grep. Not find. Not Read.
-- Include specific symbol names in queries (e.g. "CreateShipmentLeg" not "create shipment leg").
-- `get_body` works for **any indexed symbol** — Go functions, methods, structs, interfaces, and proto messages, RPCs, enums, services. Do not use `Read` on .go or .proto files when you can use `get_body` instead.
-- Use get_body for cross-package lookups. Use Read for files you already know the path to.
+- Include specific symbol names in queries when you have them (e.g. "CreateShipmentLeg" not "create shipment leg").
+- Call get_pattern or get_relevant_context once at the start. Don't retry with rephrased queries.
+- **Follow-up chain: stay in scout.** After get_relevant_context returns symbol IDs:
+  - Need source? → `get_body` (NOT Read)
+  - Need callers? → `get_callers` (NOT grep)
+  - Need callees? → `get_callees` (NOT grep)
+  - Need full call context? → `get_flow`
+  - Need blast radius? → `get_impact`
+- **Do not use Read on .go or .proto files.** Use get_body with the symbol ID instead. Read is only for non-Go files (go.mod, yaml, config, markdown).
+- **Do not use grep to find callers or usages.** Use get_callers or get_impact instead.
+- **Do not chase into external dependencies.** If a symbol comes from an external package (e.g. `saga-toolbox`, `grpc`), its signature from `get_body` is enough. Do NOT grep/find/Read in the Go module cache (`~/go/pkg/mod/`). Describe external calls by their signature and move on.
 - Before changing a function signature, call get_callers to check blast radius.
 ```
 
@@ -112,10 +158,12 @@ run.
 
 | Tool | Purpose |
 |---|---|
-| `get_relevant_context(query)` | Primary tool. FTS search + graph expansion + ranking. Returns symbol summaries within a token budget. |
-| `get_body(symbol_id)` | Full source of one symbol. Call only when about to read or edit it. |
-| `get_callers(symbol_id)` | Everything that calls this symbol. Useful before changing a signature. |
-| `get_callees(symbol_id)` | Everything this symbol depends on. |
+| `get_relevant_context(query)` | Primary tool. Exact name lookup + FTS + graph expansion + ranking. Returns symbol summaries within a token budget. |
+| `get_pattern(task)` | Complete vertical slice: proto RPC → request/response messages → Go implementation, with full source bodies. Use before implementing a new RPC. |
+| `get_body(symbol_id)` | Full source of one symbol plus signatures of referenced types/functions. Call only when about to read or edit it. |
 | `get_flow(symbol_id)` | Full source of a symbol plus caller/callee summaries in one call. Use instead of separate get_body + get_callers + get_callees. |
-| `get_pattern(task)` | A complete vertical slice (proto RPC → request/response messages → Go implementation) with full source bodies. Requires proto indexing; degrades to a single FTS hit otherwise. Use before implementing a new RPC. |
-| `get_conventions(topic)` | How a cross-cutting pattern is used across the codebase (e.g. "pagination", "error handling", "outbox"). |
+| `get_impact(symbol_id)` | Full blast radius across layers. Traces proto↔Go name linkage, generated code, callers, implementors, and tests. Use before renaming or changing a type/field. |
+| `get_callers(symbol_id)` | Everything that calls this symbol. Falls back to interface/RPC lookup and body-reference heuristics when call graph edges are missing. |
+| `get_callees(symbol_id)` | Everything this symbol depends on. Falls back to body-reference extraction. |
+| `get_unimplemented(service)` | Diff a proto service against Go server methods. Returns which RPCs are missing or stubbed. Call before adding a new RPC. |
+| `get_conventions(topic)` | Look up a documented architectural pattern by topic (e.g. "pagination", "auth", "outbox"). Returns the pattern description, pseudocode structure, and resolved example symbols. |
