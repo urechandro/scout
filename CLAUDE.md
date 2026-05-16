@@ -49,9 +49,9 @@ your codebase (.go + .proto files)
 
 | Tool | Purpose |
 |---|---|
-| `get_relevant_context(query)` | Primary tool. Exact name lookup + FTS + graph expansion + ranking. Returns symbol summaries within a 4k token budget. Includes a `packages` field grouping hits by package with counts and kinds when results span multiple packages. |
+| `get_relevant_context(query)` | Primary tool. Exact name lookup + FTS + graph expansion + ranking. Returns compact pointers (id, kind, signature, file:line) by default — pass `verbose=true` for docstrings/scores. Budget: 600 tokens (precise), 2000 (discovery). Includes a `packages` field grouping hits by package when results span multiple packages. |
 | `get_pattern(task)` | Complete vertical slice: proto RPC → request/response messages → Go implementation, with full source bodies. Use before implementing a new RPC. Requires proto indexing; degrades to a single FTS hit otherwise. |
-| `get_body(symbol_id)` | Full source of one symbol plus signatures of referenced types/functions (up to 20). Works for any indexed symbol: Go functions, methods, structs, interfaces, **and proto messages, RPCs, enums, services**. Call only when about to read or edit it. |
+| `get_body(symbol_id)` | Full source of one symbol plus signatures of referenced types/functions (up to 10). Works for any indexed symbol: Go functions, methods, structs, interfaces, **and proto messages, RPCs, enums, services**. Call only when about to read or edit it. |
 | `get_flow(symbol_id)` | Full source of a symbol plus caller/callee summaries in one call. Use instead of separate get_body + get_callers + get_callees. |
 | `get_impact(symbol_id)` | Full blast radius across layers. Traces proto↔Go name linkage, generated code, callers, implementors, and tests. Use before renaming or changing a type/field. |
 | `get_callers(symbol_id)` | Everything that calls this symbol. Falls back to interface/RPC lookup and body-reference heuristics when call graph edges are missing. |
@@ -61,12 +61,12 @@ your codebase (.go + .proto files)
 
 ## Design Decisions
 
-**Summaries by default, bodies on demand.** `get_relevant_context` returns
-signatures + docstrings, not full source. This keeps the tool result small.
-The model calls `get_body` only for symbols it's about to act on. When it
-does, `get_body` also returns a `references` field with summaries (signatures
-+ locations) of types and functions referenced in the body — this eliminates
-follow-up calls to understand dependencies before editing.
+**Brief pointers by default, bodies on demand.** `get_relevant_context` returns
+compact pointers (id, kind, signature, file:line) — no docstrings or scores
+unless `verbose=true`. This enforces the warm→hot boundary: the model orients
+with pointers, then promotes to hot via `get_body` only for symbols it's about
+to act on. `get_body` returns a `references` field with up to 10 summaries of
+referenced types/functions — enough to understand dependencies without extra calls.
 
 **Exact name lookup before FTS.** The query engine's primary retrieval path is
 exact name lookup for compound identifiers (PascalCase/camelCase). FTS is the
@@ -189,8 +189,8 @@ scout/
 - **Query type detection** (`classifyQuery`): classifies queries upfront as
   `queryPrecise` (single compound/dotted identifier like `CreateShipmentLeg` or
   `grpc.Dial`) or `queryDiscovery` (multi-word natural language like "how does
-  auth work"). Precise queries get a 1000-token budget and skip FTS entirely.
-  Discovery queries get the full 4000-token budget.
+  auth work"). Precise queries get a 600-token budget and skip FTS entirely.
+  Discovery queries get a 2000-token budget.
 - **Two-phase retrieval** in `GetRelevantContext`:
   - Phase 1: exact name lookup for compound identifiers (`extractCompoundIdents`
     detects PascalCase/camelCase). Score 3.0 + kindWeight + implBoost + generatedPenalty
@@ -225,14 +225,15 @@ scout/
 - `prioritizeSource`: reorders ranked results so source symbols come before
   generated ones, preserving score order within each group
 - `trimToBudget`: greedy fill, ~4 chars per token estimate, budget varies by
-  query type (1000 for precise, 4000 for discovery)
+  query type (600 for precise, 2000 for discovery). Uses smaller cost estimate
+  in brief mode (no docstring/why in calculation)
 - `buildFTSQuery`: strips stop words, ORs remaining terms. Dynamic FTS limit:
   `30 + len(queryTerms)*10`
 - Compound identifier utilities: `extractCompoundIdents`, `extractCompoundParts`,
   `isCompoundIdent`, `decomposeIdentifier`
 - `extractReferences`: called by `GetBody`, extracts identifiers from the symbol's
   body via `extractCallIdents` (call sites) and `extractTypeIdents` (PascalCase
-  type names), looks them up in the symbol table, returns up to 20 summaries.
+  type names), looks them up in the symbol table, returns up to 10 summaries.
   Skips self. Filters generated symbols (`.pb.go`, `.pb.gw.go`, `/gen/` paths)
   via `isGenerated` to avoid flooding results with gRPC stubs
 - **`GetImpact`**: cross-layer blast radius analysis in 6 phases:
@@ -251,22 +252,26 @@ scout/
 - 4MB scanner buffer for large responses
 - Tool schemas embedded directly — no external schema files
 
-## What Works Well (Dogfooding Results)
+## Benchmark Results
 
-Tested on a production Go codebase (~14k symbols, 78% generated). Key findings:
+Tested on a production Go codebase (~14k symbols, 78% generated) vs Opus 4.6
+without scout (grep/find/Read only). Three task types, all using Opus:
 
-- **`get_pattern`** is the standout tool. Returns a complete vertical slice
-  (proto RPC → messages → Go impl) with full source in one call. Saves 1-2
-  round trips vs manual exploration. Nails the "add a new RPC following this
-  pattern" use case.
-- **`get_conventions`** saves 3-4 round trips when implementing cross-cutting
-  patterns (pagination, outbox, auth). The structured pseudocode + resolved
-  examples give Claude enough context to implement correctly on the first try.
-- **`get_relevant_context`** is best for cross-cutting discovery ("who uses this
-  pattern?", "where is auth enforced?") — not for surgical single-symbol lookups.
-- **Exact name lookup** is the primary retrieval path. When the model includes a
-  specific symbol name like `CreateShipmentLeg`, it gets a direct hit (score 3.0)
-  instead of wading through FTS noise.
+| Task type | No Scout | With Scout | Savings |
+|---|---|---|---|
+| Broad discovery ("how is auth enforced?") | $8.61, 49 turns | $1.73, 7 turns | **80% cost, 86% turns** |
+| Implementation planning ("implement ArchiveShipmentLeg") | $6.18, 29 turns | $0.86, 3 turns | **86% cost, 90% turns** |
+| Targeted tracing ("validation before UpdateShipmentLeg") | $1.73, 13 turns | $1.53, 5 turns | **12% cost, 62% turns** |
+
+Key findings:
+- **Brief mode is critical.** Compact pointers prevent context accumulation
+  across turns. Without brief, targeted queries were 2.4x *worse* than no-scout.
+- **`get_pattern`** is the standout tool. One call replaces 10+ file reads.
+- **CLAUDE.md discipline matters as much as the tool implementation.** The
+  "Only if" gating on playbook step 2 prevents autopilot exploration — model
+  stops after step 1 when it has enough context.
+- **"Search for the analog, not the new thing"** — when implementing something
+  new, call `get_pattern` on the closest existing RPC, not the non-existent one.
 
 ## Known Issues / Next Steps
 
@@ -276,8 +281,8 @@ Tested on a production Go codebase (~14k symbols, 78% generated). Key findings:
   on several RPCs and compare manually.
 
 ### Housekeeping
-- No tests yet.
 - Pre-commit hook not tested end-to-end.
+- Store and query engine have tests; indexer and MCP server do not yet.
 
 ## Dependencies
 
