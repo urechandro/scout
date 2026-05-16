@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/urechandro/scout/store"
@@ -822,6 +823,737 @@ func TestGetPattern_MessageBodies(t *testing.T) {
 	}
 	if resp.ResponseMessage.Body != respBody {
 		t.Errorf("response message body = %q, want %q", resp.ResponseMessage.Body, respBody)
+	}
+}
+
+// --- GetImpact ---
+
+func TestGetImpact_CrossLayerLinkage(t *testing.T) {
+	s := newTestStore(t)
+	seedSymbols(t, s, []store.Symbol{
+		{
+			ID: "myapp/svc.Server.CreateShipment", Package: "myapp/svc",
+			Name: "CreateShipment", Kind: "method",
+			Signature: "func (s *Server) CreateShipment(ctx, req) (*resp, error)",
+			File: "/svc/server.go", LineStart: 10, LineEnd: 30,
+		},
+		{
+			ID: "myapp/proto.ShipmentService.CreateShipment", Package: "myapp/proto",
+			Name: "CreateShipment", Kind: "rpc",
+			Signature: "rpc CreateShipment(CreateShipmentRequest) returns (Shipment)",
+			File: "/proto/shipment.proto", LineStart: 5, LineEnd: 5,
+		},
+		{
+			ID: "myapp/gen.CreateShipment", Package: "myapp/gen",
+			Name: "CreateShipment", Kind: "method",
+			Signature: "func CreateShipment(ctx, req) (*resp, error)",
+			File: "/gen/shipment.pb.go", LineStart: 100, LineEnd: 120,
+		},
+		{
+			ID: "myapp/svc_test.TestCreateShipment", Package: "myapp/svc_test",
+			Name: "TestCreateShipment", Kind: "func",
+			Signature: "func TestCreateShipment(t *testing.T)",
+			File: "/svc/server_test.go", LineStart: 50, LineEnd: 80,
+		},
+	})
+
+	// Edge: Go impl implements the RPC
+	if err := s.UpsertEdge(store.Edge{FromID: "myapp/svc.Server.CreateShipment", ToID: "myapp/proto.ShipmentService.CreateShipment", Kind: "implements"}); err != nil {
+		t.Fatal(err)
+	}
+	// Edge: test calls the impl
+	if err := s.UpsertEdge(store.Edge{FromID: "myapp/svc_test.TestCreateShipment", ToID: "myapp/svc.Server.CreateShipment", Kind: "calls"}); err != nil {
+		t.Fatal(err)
+	}
+
+	engine := New(s)
+	resp, err := engine.GetImpact("myapp/svc.Server.CreateShipment")
+	if err != nil {
+		t.Fatalf("GetImpact: %v", err)
+	}
+
+	if resp.Symbol.ID != "myapp/svc.Server.CreateShipment" {
+		t.Errorf("target = %s, want myapp/svc.Server.CreateShipment", resp.Symbol.ID)
+	}
+
+	// Proto should appear via same-name lookup.
+	if len(resp.Proto) == 0 {
+		t.Error("expected proto layer hit for CreateShipment")
+	}
+
+	// Generated should appear via same-name lookup.
+	if len(resp.Generated) == 0 {
+		t.Error("expected generated layer hit for CreateShipment")
+	}
+
+	// Test should appear as caller.
+	foundTest := false
+	for _, s := range resp.Tests {
+		if s.ID == "myapp/svc_test.TestCreateShipment" {
+			foundTest = true
+		}
+	}
+	if !foundTest {
+		t.Error("expected test caller TestCreateShipment")
+	}
+
+	if resp.Total == 0 {
+		t.Error("expected non-zero total")
+	}
+}
+
+func TestGetImpact_RPCMessages(t *testing.T) {
+	s := newTestStore(t)
+	seedSymbols(t, s, []store.Symbol{
+		{
+			ID: "myapp/proto.ShipmentService.CreateShipment", Package: "myapp/proto",
+			Name: "CreateShipment", Kind: "rpc",
+			Signature: "rpc CreateShipment(CreateShipmentRequest) returns (CreateShipmentResponse)",
+			File: "/proto/shipment.proto", LineStart: 5, LineEnd: 5,
+		},
+		{
+			ID: "myapp/proto.CreateShipmentRequest", Package: "myapp/proto",
+			Name: "CreateShipmentRequest", Kind: "message",
+			Signature: "message CreateShipmentRequest",
+			File: "/proto/shipment.proto", LineStart: 10, LineEnd: 20,
+		},
+		{
+			ID: "myapp/proto.CreateShipmentResponse", Package: "myapp/proto",
+			Name: "CreateShipmentResponse", Kind: "message",
+			Signature: "message CreateShipmentResponse",
+			File: "/proto/shipment.proto", LineStart: 22, LineEnd: 30,
+		},
+	})
+
+	engine := New(s)
+	resp, err := engine.GetImpact("myapp/proto.ShipmentService.CreateShipment")
+	if err != nil {
+		t.Fatalf("GetImpact: %v", err)
+	}
+
+	// Both request and response messages should appear.
+	allIDs := map[string]bool{}
+	for _, s := range resp.Proto {
+		allIDs[s.ID] = true
+	}
+	if !allIDs["myapp/proto.CreateShipmentRequest"] {
+		t.Error("expected CreateShipmentRequest in impact")
+	}
+	if !allIDs["myapp/proto.CreateShipmentResponse"] {
+		t.Error("expected CreateShipmentResponse in impact")
+	}
+}
+
+func TestGetImpact_SymbolNotFound(t *testing.T) {
+	s := newTestStore(t)
+	engine := New(s)
+	_, err := engine.GetImpact("nonexistent.Symbol")
+	if err == nil {
+		t.Error("expected error for non-existent symbol")
+	}
+}
+
+// --- GetFlow ---
+
+func TestGetFlow_WithCallersAndCallees(t *testing.T) {
+	s := newTestStore(t)
+	seedSymbols(t, s, []store.Symbol{
+		{
+			ID: "myapp/svc.Server.CreateShipment", Package: "myapp/svc",
+			Name: "CreateShipment", Kind: "method",
+			Signature: "func (s *Server) CreateShipment(ctx, req) (*resp, error)",
+			File: "/svc/server.go", LineStart: 10, LineEnd: 30,
+			Body: "func (s *Server) CreateShipment(ctx, req) (*resp, error) {\n\treturn nil, nil\n}",
+		},
+		{
+			ID: "myapp/handler.HandleCreate", Package: "myapp/handler",
+			Name: "HandleCreate", Kind: "func",
+			Signature: "func HandleCreate()",
+			File: "/handler/create.go", LineStart: 1, LineEnd: 10,
+		},
+		{
+			ID: "myapp/repo.Save", Package: "myapp/repo",
+			Name: "Save", Kind: "method",
+			Signature: "func (r *Repo) Save(ctx, obj) error",
+			File: "/repo/repo.go", LineStart: 1, LineEnd: 15,
+		},
+	})
+
+	// HandleCreate calls CreateShipment, CreateShipment calls Save.
+	if err := s.UpsertEdge(store.Edge{FromID: "myapp/handler.HandleCreate", ToID: "myapp/svc.Server.CreateShipment", Kind: "calls"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertEdge(store.Edge{FromID: "myapp/svc.Server.CreateShipment", ToID: "myapp/repo.Save", Kind: "calls"}); err != nil {
+		t.Fatal(err)
+	}
+
+	engine := New(s)
+	resp, err := engine.GetFlow("myapp/svc.Server.CreateShipment")
+	if err != nil {
+		t.Fatalf("GetFlow: %v", err)
+	}
+
+	if resp.Symbol.ID != "myapp/svc.Server.CreateShipment" {
+		t.Errorf("symbol = %s, want CreateShipment", resp.Symbol.ID)
+	}
+	if resp.Symbol.Body == "" {
+		t.Error("expected body on target symbol")
+	}
+
+	if len(resp.Callers) != 1 || resp.Callers[0].ID != "myapp/handler.HandleCreate" {
+		t.Errorf("callers = %v, want [HandleCreate]", resp.Callers)
+	}
+	if len(resp.Callees) != 1 || resp.Callees[0].ID != "myapp/repo.Save" {
+		t.Errorf("callees = %v, want [Save]", resp.Callees)
+	}
+}
+
+func TestGetFlow_SymbolNotFound(t *testing.T) {
+	s := newTestStore(t)
+	engine := New(s)
+	_, err := engine.GetFlow("nonexistent.Symbol")
+	if err == nil {
+		t.Error("expected error for non-existent symbol")
+	}
+}
+
+// --- GetCallers ---
+
+func TestGetCallers_DirectEdges(t *testing.T) {
+	s := newTestStore(t)
+	seedSymbols(t, s, []store.Symbol{
+		{
+			ID: "myapp/svc.Server.CreateShipment", Package: "myapp/svc",
+			Name: "CreateShipment", Kind: "method",
+			Signature: "func (s *Server) CreateShipment(ctx, req) (*resp, error)",
+			File: "/svc/server.go", LineStart: 10, LineEnd: 30,
+		},
+		{
+			ID: "myapp/handler.HandleCreate", Package: "myapp/handler",
+			Name: "HandleCreate", Kind: "func",
+			Signature: "func HandleCreate()",
+			File: "/handler/create.go", LineStart: 1, LineEnd: 10,
+		},
+		{
+			ID: "myapp/handler.HandleBatch", Package: "myapp/handler",
+			Name: "HandleBatch", Kind: "func",
+			Signature: "func HandleBatch()",
+			File: "/handler/batch.go", LineStart: 1, LineEnd: 10,
+		},
+	})
+
+	if err := s.UpsertEdge(store.Edge{FromID: "myapp/handler.HandleCreate", ToID: "myapp/svc.Server.CreateShipment", Kind: "calls"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertEdge(store.Edge{FromID: "myapp/handler.HandleBatch", ToID: "myapp/svc.Server.CreateShipment", Kind: "calls"}); err != nil {
+		t.Fatal(err)
+	}
+
+	engine := New(s)
+	callers, err := engine.GetCallers("myapp/svc.Server.CreateShipment")
+	if err != nil {
+		t.Fatalf("GetCallers: %v", err)
+	}
+
+	if len(callers) != 2 {
+		t.Fatalf("expected 2 callers, got %d", len(callers))
+	}
+
+	ids := map[string]bool{}
+	for _, c := range callers {
+		ids[c.ID] = true
+		if c.Why != "direct caller" {
+			t.Errorf("caller %s has why=%q, want 'direct caller'", c.ID, c.Why)
+		}
+	}
+	if !ids["myapp/handler.HandleCreate"] || !ids["myapp/handler.HandleBatch"] {
+		t.Errorf("missing expected callers: %v", ids)
+	}
+}
+
+func TestGetCallers_FallbackToImplements(t *testing.T) {
+	s := newTestStore(t)
+	seedSymbols(t, s, []store.Symbol{
+		{
+			ID: "myapp/svc.Server.CreateShipment", Package: "myapp/svc",
+			Name: "CreateShipment", Kind: "method",
+			Signature: "func (s *Server) CreateShipment(ctx, req) (*resp, error)",
+			File: "/svc/server.go", LineStart: 10, LineEnd: 30,
+		},
+		{
+			ID: "myapp/proto.ShipmentService.CreateShipment", Package: "myapp/proto",
+			Name: "CreateShipment", Kind: "rpc",
+			Signature: "rpc CreateShipment(CreateShipmentRequest) returns (Shipment)",
+			File: "/proto/shipment.proto", LineStart: 5, LineEnd: 5,
+		},
+	})
+
+	// Impl implements the RPC but has no direct callers.
+	if err := s.UpsertEdge(store.Edge{FromID: "myapp/svc.Server.CreateShipment", ToID: "myapp/proto.ShipmentService.CreateShipment", Kind: "implements"}); err != nil {
+		t.Fatal(err)
+	}
+
+	engine := New(s)
+	callers, err := engine.GetCallers("myapp/svc.Server.CreateShipment")
+	if err != nil {
+		t.Fatalf("GetCallers: %v", err)
+	}
+
+	if len(callers) != 1 {
+		t.Fatalf("expected 1 implements fallback, got %d", len(callers))
+	}
+	if callers[0].ID != "myapp/proto.ShipmentService.CreateShipment" {
+		t.Errorf("fallback = %s, want proto RPC", callers[0].ID)
+	}
+	if callers[0].Why != "gRPC entry point: rpc CreateShipment(CreateShipmentRequest) returns (Shipment)" {
+		t.Errorf("unexpected why: %s", callers[0].Why)
+	}
+}
+
+func TestGetCallers_FallbackToBodyReference(t *testing.T) {
+	s := newTestStore(t)
+	seedSymbols(t, s, []store.Symbol{
+		{
+			ID: "myapp/util.NewClient", Package: "myapp/util",
+			Name: "NewClient", Kind: "func",
+			Signature: "func NewClient() *Client",
+			File: "/util/client.go", LineStart: 1, LineEnd: 10,
+		},
+		{
+			ID: "myapp/main.setup", Package: "myapp/main",
+			Name: "setup", Kind: "func",
+			Signature: "func setup()",
+			File: "/main.go", LineStart: 1, LineEnd: 20,
+			Body: "func setup() {\n\tc := NewClient()\n\t_ = c\n}",
+		},
+	})
+
+	engine := New(s)
+	callers, err := engine.GetCallers("myapp/util.NewClient")
+	if err != nil {
+		t.Fatalf("GetCallers: %v", err)
+	}
+
+	if len(callers) != 1 {
+		t.Fatalf("expected 1 body-reference caller, got %d", len(callers))
+	}
+	if callers[0].ID != "myapp/main.setup" {
+		t.Errorf("body caller = %s, want main.setup", callers[0].ID)
+	}
+}
+
+// --- GetCallees ---
+
+func TestGetCallees_DirectEdges(t *testing.T) {
+	s := newTestStore(t)
+	seedSymbols(t, s, []store.Symbol{
+		{
+			ID: "myapp/svc.Server.CreateShipment", Package: "myapp/svc",
+			Name: "CreateShipment", Kind: "method",
+			Signature: "func (s *Server) CreateShipment(ctx, req) (*resp, error)",
+			File: "/svc/server.go", LineStart: 10, LineEnd: 30,
+		},
+		{
+			ID: "myapp/auth.ValidateToken", Package: "myapp/auth",
+			Name: "ValidateToken", Kind: "func",
+			Signature: "func ValidateToken(ctx) error",
+			File: "/auth/auth.go", LineStart: 1, LineEnd: 10,
+		},
+		{
+			ID: "myapp/repo.Save", Package: "myapp/repo",
+			Name: "Save", Kind: "method",
+			Signature: "func (r *Repo) Save(ctx, obj) error",
+			File: "/repo/repo.go", LineStart: 1, LineEnd: 15,
+		},
+	})
+
+	if err := s.UpsertEdge(store.Edge{FromID: "myapp/svc.Server.CreateShipment", ToID: "myapp/auth.ValidateToken", Kind: "calls"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertEdge(store.Edge{FromID: "myapp/svc.Server.CreateShipment", ToID: "myapp/repo.Save", Kind: "calls"}); err != nil {
+		t.Fatal(err)
+	}
+
+	engine := New(s)
+	callees, err := engine.GetCallees("myapp/svc.Server.CreateShipment")
+	if err != nil {
+		t.Fatalf("GetCallees: %v", err)
+	}
+
+	if len(callees) != 2 {
+		t.Fatalf("expected 2 callees, got %d", len(callees))
+	}
+
+	ids := map[string]bool{}
+	for _, c := range callees {
+		ids[c.ID] = true
+	}
+	if !ids["myapp/auth.ValidateToken"] || !ids["myapp/repo.Save"] {
+		t.Errorf("missing expected callees: %v", ids)
+	}
+}
+
+func TestGetCallees_FallbackToBody(t *testing.T) {
+	s := newTestStore(t)
+	seedSymbols(t, s, []store.Symbol{
+		{
+			ID: "myapp/svc.Server.CreateShipment", Package: "myapp/svc",
+			Name: "CreateShipment", Kind: "method",
+			Signature: "func (s *Server) CreateShipment(ctx, req) (*resp, error)",
+			File: "/svc/server.go", LineStart: 10, LineEnd: 30,
+			Body: "func (s *Server) CreateShipment(ctx, req) (*resp, error) {\n\tValidateToken(ctx)\n\treturn nil, nil\n}",
+		},
+		{
+			ID: "myapp/auth.ValidateToken", Package: "myapp/auth",
+			Name: "ValidateToken", Kind: "func",
+			Signature: "func ValidateToken(ctx) error",
+			File: "/auth/auth.go", LineStart: 1, LineEnd: 10,
+		},
+	})
+
+	// No call edges — should fall back to body extraction.
+	engine := New(s)
+	callees, err := engine.GetCallees("myapp/svc.Server.CreateShipment")
+	if err != nil {
+		t.Fatalf("GetCallees: %v", err)
+	}
+
+	if len(callees) == 0 {
+		t.Fatal("expected body-fallback callees, got none")
+	}
+
+	found := false
+	for _, c := range callees {
+		if c.ID == "myapp/auth.ValidateToken" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected ValidateToken in body-fallback callees")
+	}
+}
+
+// --- GetConventions ---
+
+func TestGetConventions_DocumentedConvention(t *testing.T) {
+	s := newTestStore(t)
+	seedSymbols(t, s, []store.Symbol{
+		{
+			ID: "myapp/svc.Server.CreateShipment", Package: "myapp/svc",
+			Name: "CreateShipment", Kind: "method",
+			Signature: "func (s *Server) CreateShipment(ctx, req) (*resp, error)",
+			File: "/svc/server.go", LineStart: 10, LineEnd: 30,
+		},
+	})
+
+	if err := s.UpsertConvention(store.Convention{
+		Name:        "transactional-outbox",
+		Terms:       []string{"outbox", "event", "transactional"},
+		Description: "Use a transactional outbox to publish domain events atomically.",
+		Structure:   "1. Begin TX\n2. Write entity\n3. Write outbox row\n4. Commit",
+		Examples:    []string{"svc.Server.CreateShipment"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	engine := New(s)
+	result, err := engine.GetConventions("transactional outbox")
+	if err != nil {
+		t.Fatalf("GetConventions: %v", err)
+	}
+
+	if result.Name != "transactional-outbox" {
+		t.Errorf("name = %q, want transactional-outbox", result.Name)
+	}
+	if result.Description == "" {
+		t.Error("expected description")
+	}
+	if result.Structure == "" {
+		t.Error("expected structure")
+	}
+	if len(result.Examples) == 0 {
+		t.Error("expected resolved examples")
+	}
+}
+
+func TestGetConventions_FTSFallback(t *testing.T) {
+	s := newTestStore(t)
+	seedSymbols(t, s, []store.Symbol{
+		{
+			ID: "myapp/middleware.RateLimit", Package: "myapp/middleware",
+			Name: "RateLimit", Kind: "func",
+			Signature: "func RateLimit(next http.Handler) http.Handler",
+			File: "/middleware/rate.go", LineStart: 1, LineEnd: 20,
+		},
+		{
+			ID: "myapp/middleware.RateLimiter", Package: "myapp/middleware",
+			Name: "RateLimiter", Kind: "struct",
+			Signature: "type RateLimiter struct",
+			File: "/middleware/rate.go", LineStart: 22, LineEnd: 30,
+		},
+	})
+
+	engine := New(s)
+	result, err := engine.GetConventions("rate limiting")
+	if err != nil {
+		t.Fatalf("GetConventions: %v", err)
+	}
+
+	if len(result.Examples) == 0 {
+		t.Error("expected FTS fallback results")
+	}
+	if result.Hint == "" {
+		t.Error("expected hint when falling back to FTS")
+	}
+}
+
+func TestGetConventions_NoMatch(t *testing.T) {
+	s := newTestStore(t)
+	engine := New(s)
+	result, err := engine.GetConventions("quantum computing")
+	if err != nil {
+		t.Fatalf("GetConventions: %v", err)
+	}
+
+	if result.Hint == "" {
+		t.Error("expected hint when nothing matches")
+	}
+}
+
+// --- Graph expansion ---
+
+func TestExpand_OneHop(t *testing.T) {
+	s := newTestStore(t)
+	seedSymbols(t, s, []store.Symbol{
+		{
+			ID: "myapp/svc.Server.CreateShipment", Package: "myapp/svc",
+			Name: "CreateShipment", Kind: "method",
+			Signature: "func (s *Server) CreateShipment(ctx, req) (*resp, error)",
+			File: "/svc/server.go", LineStart: 10, LineEnd: 30,
+		},
+		{
+			ID: "myapp/handler.HandleCreate", Package: "myapp/handler",
+			Name: "HandleCreate", Kind: "func",
+			Signature: "func HandleCreate()",
+			File: "/handler/create.go", LineStart: 1, LineEnd: 10,
+		},
+		{
+			ID: "myapp/repo.Save", Package: "myapp/repo",
+			Name: "Save", Kind: "method",
+			Signature: "func (r *Repo) Save(ctx, obj) error",
+			File: "/repo/repo.go", LineStart: 1, LineEnd: 15,
+		},
+	})
+
+	if err := s.UpsertEdge(store.Edge{FromID: "myapp/handler.HandleCreate", ToID: "myapp/svc.Server.CreateShipment", Kind: "calls"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertEdge(store.Edge{FromID: "myapp/svc.Server.CreateShipment", ToID: "myapp/repo.Save", Kind: "calls"}); err != nil {
+		t.Fatal(err)
+	}
+
+	engine := New(s)
+	seeds := map[string]*SymbolSummary{
+		"myapp/svc.Server.CreateShipment": {ID: "myapp/svc.Server.CreateShipment"},
+	}
+	expanded, err := engine.expand(seeds, 1)
+	if err != nil {
+		t.Fatalf("expand: %v", err)
+	}
+
+	if _, ok := expanded["myapp/handler.HandleCreate"]; !ok {
+		t.Error("expected caller HandleCreate in expansion")
+	}
+	if _, ok := expanded["myapp/repo.Save"]; !ok {
+		t.Error("expected callee Save in expansion")
+	}
+	// Seed should not be in result.
+	if _, ok := expanded["myapp/svc.Server.CreateShipment"]; ok {
+		t.Error("seed should not appear in expansion result")
+	}
+}
+
+func TestExpand_ZeroDepth(t *testing.T) {
+	s := newTestStore(t)
+	seedSymbols(t, s, []store.Symbol{
+		{
+			ID: "myapp/svc.Server.CreateShipment", Package: "myapp/svc",
+			Name: "CreateShipment", Kind: "method",
+			Signature: "func (s *Server) CreateShipment(ctx, req) (*resp, error)",
+			File: "/svc/server.go", LineStart: 10, LineEnd: 30,
+		},
+		{
+			ID: "myapp/repo.Save", Package: "myapp/repo",
+			Name: "Save", Kind: "method",
+			Signature: "func (r *Repo) Save(ctx, obj) error",
+			File: "/repo/repo.go", LineStart: 1, LineEnd: 15,
+		},
+	})
+
+	if err := s.UpsertEdge(store.Edge{FromID: "myapp/svc.Server.CreateShipment", ToID: "myapp/repo.Save", Kind: "calls"}); err != nil {
+		t.Fatal(err)
+	}
+
+	engine := New(s)
+	seeds := map[string]*SymbolSummary{
+		"myapp/svc.Server.CreateShipment": {ID: "myapp/svc.Server.CreateShipment"},
+	}
+	expanded, err := engine.expand(seeds, 0)
+	if err != nil {
+		t.Fatalf("expand: %v", err)
+	}
+
+	if len(expanded) != 0 {
+		t.Errorf("expand(depth=0) should return empty, got %d", len(expanded))
+	}
+}
+
+func TestExpand_CallerScore(t *testing.T) {
+	s := newTestStore(t)
+	seedSymbols(t, s, []store.Symbol{
+		{
+			ID: "myapp/svc.Server.CreateShipment", Package: "myapp/svc",
+			Name: "CreateShipment", Kind: "method",
+			Signature: "func (s *Server) CreateShipment(ctx, req) (*resp, error)",
+			File: "/svc/server.go", LineStart: 10, LineEnd: 30,
+		},
+		{
+			ID: "myapp/handler.HandleCreate", Package: "myapp/handler",
+			Name: "HandleCreate", Kind: "func",
+			Signature: "func HandleCreate()",
+			File: "/handler/create.go", LineStart: 1, LineEnd: 10,
+		},
+	})
+
+	if err := s.UpsertEdge(store.Edge{FromID: "myapp/handler.HandleCreate", ToID: "myapp/svc.Server.CreateShipment", Kind: "calls"}); err != nil {
+		t.Fatal(err)
+	}
+
+	engine := New(s)
+	seeds := map[string]*SymbolSummary{
+		"myapp/svc.Server.CreateShipment": {ID: "myapp/svc.Server.CreateShipment"},
+	}
+	expanded, err := engine.expand(seeds, 1)
+	if err != nil {
+		t.Fatalf("expand: %v", err)
+	}
+
+	caller := expanded["myapp/handler.HandleCreate"]
+	if caller == nil {
+		t.Fatal("expected HandleCreate in expansion")
+	}
+	// Caller at depth 1 should have score 0.4/1 = 0.4
+	if caller.Score != 0.4 {
+		t.Errorf("caller score = %f, want 0.4", caller.Score)
+	}
+}
+
+// --- classifyLayer ---
+
+func TestClassifyLayer(t *testing.T) {
+	tests := []struct {
+		file string
+		want ImpactLayer
+	}{
+		{"/proto/shipment.proto", LayerProto},
+		{"/gen/shipment.pb.go", LayerGenerated},
+		{"/gen/shipment.pb.gw.go", LayerGenerated},
+		{"/svc/server.go", LayerImplementation},
+		{"/svc/server_test.go", LayerTest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.file, func(t *testing.T) {
+			got := classifyLayer(tt.file)
+			if got != tt.want {
+				t.Errorf("classifyLayer(%q) = %q, want %q", tt.file, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- dedupGenerated ---
+
+func TestDedupGenerated_CollapsesCopies(t *testing.T) {
+	syms := []SymbolSummary{
+		{ID: "myapp/gen/frontend.CreateShipment", Kind: "method", File: "/gen/frontend/shipment.pb.go", Why: "generated code"},
+		{ID: "myapp/gen/backend.CreateShipment", Kind: "method", File: "/gen/backend/shipment.pb.go", Why: "generated code"},
+		{ID: "myapp/gen/frontend.Shipment", Kind: "struct", File: "/gen/frontend/shipment.pb.go", Why: "generated code"},
+	}
+
+	result := dedupGenerated(syms)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 after dedup (method + struct), got %d: %v", len(result), result)
+	}
+
+	// The backend copy should be preferred for the method.
+	for _, s := range result {
+		if s.Kind == "method" {
+			if s.ID != "myapp/gen/backend.CreateShipment" {
+				t.Errorf("expected backend copy, got %s", s.ID)
+			}
+			if !strings.Contains(s.Why, "+1 copies") {
+				t.Errorf("expected dedup annotation in Why, got %q", s.Why)
+			}
+		}
+	}
+}
+
+
+// --- parseRPCMessages ---
+
+func TestParseRPCMessages(t *testing.T) {
+	tests := []struct {
+		sig      string
+		wantReq  string
+		wantResp string
+	}{
+		{"rpc CreateShipment(CreateShipmentRequest) returns (Shipment)", "CreateShipmentRequest", "Shipment"},
+		{"rpc ListLegs(ListLegsRequest) returns (ListLegsResponse)", "ListLegsRequest", "ListLegsResponse"},
+		{"not an RPC signature", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.sig, func(t *testing.T) {
+			req, resp := parseRPCMessages(tt.sig)
+			if req != tt.wantReq {
+				t.Errorf("req = %q, want %q", req, tt.wantReq)
+			}
+			if resp != tt.wantResp {
+				t.Errorf("resp = %q, want %q", resp, tt.wantResp)
+			}
+		})
+	}
+}
+
+// --- Fuzzy resolution in tools ---
+
+func TestGetCallers_FuzzyResolution(t *testing.T) {
+	s := newTestStore(t)
+	seedSymbols(t, s, []store.Symbol{
+		{
+			ID: "myapp/svc.Server.CreateShipment", Package: "myapp/svc",
+			Name: "CreateShipment", Kind: "method",
+			Signature: "func (s *Server) CreateShipment(ctx, req) (*resp, error)",
+			File: "/svc/server.go", LineStart: 10, LineEnd: 30,
+		},
+		{
+			ID: "myapp/handler.HandleCreate", Package: "myapp/handler",
+			Name: "HandleCreate", Kind: "func",
+			Signature: "func HandleCreate()",
+			File: "/handler/create.go", LineStart: 1, LineEnd: 10,
+		},
+	})
+	if err := s.UpsertEdge(store.Edge{FromID: "myapp/handler.HandleCreate", ToID: "myapp/svc.Server.CreateShipment", Kind: "calls"}); err != nil {
+		t.Fatal(err)
+	}
+
+	engine := New(s)
+	// Use a suffix that should resolve via fuzzy lookup.
+	callers, err := engine.GetCallers("svc.Server.CreateShipment")
+	if err != nil {
+		t.Fatalf("GetCallers (fuzzy): %v", err)
+	}
+	if len(callers) != 1 {
+		t.Fatalf("expected 1 caller via fuzzy resolution, got %d", len(callers))
 	}
 }
 
