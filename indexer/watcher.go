@@ -9,40 +9,48 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+
+	"github.com/urechandro/scout/protoindexer"
+	"github.com/urechandro/scout/store"
 )
 
-// Watcher monitors a directory tree for Go file changes and triggers
-// reindexing. On each save it runs RunFilesLight (~1ms) immediately for
-// correct line numbers, then debounces a full RunFiles (~1.5s) for
-// accurate call edges and type information.
+// Watcher monitors a directory tree for Go and proto file changes and triggers
+// reindexing. On each Go save it runs RunFilesLight (~50ms) immediately for
+// correct line numbers, then debounces a full RunFiles (~1.5s) for accurate
+// call edges. Proto file saves reindex immediately (the parser is fast).
 type Watcher struct {
 	idx          *Indexer
+	protoIdx     *protoindexer.Indexer
+	store        *store.Store
 	root         string
-	debounce     time.Duration
 	fullDebounce time.Duration
 
-	mu           sync.Mutex
-	pendingFull  map[string]bool
-	fullTimer    *time.Timer
+	mu          sync.Mutex
+	pendingFull map[string]bool
+	fullTimer   *time.Timer
 }
 
 // WatcherConfig controls watcher behavior.
 type WatcherConfig struct {
 	// Root is the directory tree to watch recursively.
 	Root string
-	// Debounce is the delay before running the full reindex after a save.
+	// FullDebounce is the delay before running the full Go reindex after a save.
 	// Default: 2 seconds.
 	FullDebounce time.Duration
 }
 
-// NewWatcher creates a file watcher for the given indexer.
-func NewWatcher(idx *Indexer, cfg WatcherConfig) *Watcher {
+// NewWatcher creates a file watcher for the given indexer and store.
+func NewWatcher(idx *Indexer, s *store.Store, cfg WatcherConfig) *Watcher {
 	debounce := cfg.FullDebounce
 	if debounce == 0 {
 		debounce = 2 * time.Second
 	}
 	return &Watcher{
-		idx:          idx,
+		idx:   idx,
+		store: s,
+		protoIdx: protoindexer.New(protoindexer.Config{
+			Dir: cfg.Root,
+		}, s),
 		root:         cfg.Root,
 		fullDebounce: debounce,
 		pendingFull:  make(map[string]bool),
@@ -61,7 +69,7 @@ func (w *Watcher) Run() error {
 		return err
 	}
 
-	log.Printf("watcher: monitoring %s for .go file changes", w.root)
+	log.Printf("watcher: monitoring %s for .go and .proto file changes", w.root)
 
 	for {
 		select {
@@ -92,15 +100,20 @@ func (w *Watcher) handleEvent(event fsnotify.Event, watcher *fsnotify.Watcher) {
 		}
 	}
 
-	if !isGoSource(path) {
-		return
-	}
-
 	if !event.Has(fsnotify.Write) && !event.Has(fsnotify.Create) {
 		return
 	}
 
-	// Phase 1: fast AST-only reindex (~1ms).
+	switch {
+	case isGoSource(path):
+		w.handleGoChange(path)
+	case isProtoSource(path):
+		w.handleProtoChange(path)
+	}
+}
+
+func (w *Watcher) handleGoChange(path string) {
+	// Phase 1: fast AST-only reindex (~50ms).
 	start := time.Now()
 	if err := w.idx.RunFilesLight([]string{path}); err != nil {
 		log.Printf("watcher: light reindex %s failed: %v", path, err)
@@ -116,6 +129,15 @@ func (w *Watcher) handleEvent(event fsnotify.Event, watcher *fsnotify.Watcher) {
 	}
 	w.fullTimer = time.AfterFunc(w.fullDebounce, w.runFullReindex)
 	w.mu.Unlock()
+}
+
+func (w *Watcher) handleProtoChange(path string) {
+	start := time.Now()
+	if err := w.protoIdx.RunFiles([]string{path}); err != nil {
+		log.Printf("watcher: proto reindex %s failed: %v", path, err)
+		return
+	}
+	log.Printf("watcher: proto reindex %s (%v)", filepath.Base(path), time.Since(start))
 }
 
 func (w *Watcher) runFullReindex() {
@@ -167,4 +189,8 @@ func (w *Watcher) shouldSkipDir(name string) bool {
 
 func isGoSource(path string) bool {
 	return strings.HasSuffix(path, ".go")
+}
+
+func isProtoSource(path string) bool {
+	return strings.HasSuffix(path, ".proto")
 }

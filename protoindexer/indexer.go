@@ -32,6 +32,19 @@ func New(cfg Config, s *store.Store) *Indexer {
 	return &Indexer{cfg: cfg, store: s}
 }
 
+// RunFiles re-indexes only the specified proto files.
+func (idx *Indexer) RunFiles(files []string) error {
+	for _, f := range files {
+		if err := idx.store.DeleteByFile(f); err != nil {
+			return fmt.Errorf("delete stale symbols for %s: %w", f, err)
+		}
+		if _, err := idx.indexFile(f); err != nil {
+			return fmt.Errorf("reindex %s: %w", f, err)
+		}
+	}
+	return nil
+}
+
 // Run walks the configured directory and indexes all .proto files.
 func (idx *Indexer) Run() error {
 	var files []string

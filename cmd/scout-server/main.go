@@ -38,7 +38,7 @@ func main() {
 			Dir:      *watch,
 			Patterns: []string{"./..."},
 		}, s)
-		w := indexer.NewWatcher(idx, indexer.WatcherConfig{Root: *watch})
+		w := indexer.NewWatcher(idx, s, indexer.WatcherConfig{Root: *watch})
 		go func() {
 			if err := w.Run(); err != nil {
 				logger.Error("watcher error", "err", err)
