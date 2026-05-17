@@ -184,8 +184,10 @@ scout/
 - Phase 2 (debounced): `RunFiles` after configurable delay (default 2s) — restores
   accurate call edges and type information
 - Watches recursively, auto-adds new directories, skips hidden/vendor/node_modules
-- Only triggers on `.go` file writes/creates
-- Debounce batches rapid saves into a single full reindex
+- Triggers on `.go` and `.proto` file writes/creates
+- Go files: two-phase (light immediate + full debounced)
+- Proto files: immediate single-phase reindex (parser is fast, no type-checking)
+- Debounce batches rapid Go saves into a single full reindex
 - Started as a goroutine in the MCP server via `--watch` flag
 
 ### protoindexer/indexer.go
@@ -194,6 +196,7 @@ scout/
 - Uses a line-by-line parser (no protoc dependency)
 - Tracks `blockSymIdx` in parse state to update LineEnd when closing braces are
   found — this gives get_body full proto message/enum/service definitions
+- `RunFiles(files)`: incremental reindex for specific proto files, used by watcher
 - Supports `ExcludePaths` to skip generated or vendor directories
 
 ### store/store.go
