@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/urechandro/scout/indexer"
 	"github.com/urechandro/scout/mcp"
 	"github.com/urechandro/scout/query"
 	"github.com/urechandro/scout/store"
@@ -13,6 +14,7 @@ import (
 
 func main() {
 	dbPath := flag.String("db", "/data/index.db", "Path to SQLite database.")
+	watch := flag.String("watch", "", "Root directory to watch for file changes (enables live reindexing).")
 	debug := flag.Bool("debug", false, "Enable debug logging.")
 	flag.Parse()
 
@@ -30,6 +32,19 @@ func main() {
 		os.Exit(1)
 	}
 	defer s.Close()
+
+	if *watch != "" {
+		idx := indexer.New(indexer.Config{
+			Dir:      *watch,
+			Patterns: []string{"./..."},
+		}, s)
+		w := indexer.NewWatcher(idx, indexer.WatcherConfig{Root: *watch})
+		go func() {
+			if err := w.Run(); err != nil {
+				logger.Error("watcher error", "err", err)
+			}
+		}()
+	}
 
 	engine := query.New(s)
 	server := mcp.New(logger, engine, s)

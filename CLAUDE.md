@@ -114,8 +114,12 @@ scout/
 │   │                         symbols and call edges, writes to store
 │   ├── deps.go             — Indexes exported signatures from external
 │   │                         dependency packages (--deps flag)
-│   └── conventions.go      — Reads conventions.yaml from the indexed project,
-│                             upserts entries into the conventions table
+│   ├── conventions.go      — Reads conventions.yaml from the indexed project,
+│   │                         upserts entries into the conventions table
+│   ├── light.go            — Fast AST-only reindex (~50ms): updates symbols
+│   │                         and line numbers without type-checking
+│   └── watcher.go          — fsnotify file watcher with hybrid reindex:
+│                             light immediately, full after debounce
 ├── protoindexer/
 │   └── indexer.go          — Parses .proto files, extracts services, RPCs,
 │                             messages, and enums, writes to store
@@ -162,6 +166,27 @@ scout/
 - If absent, silently skips (conventions are optional)
 - Parses YAML into `conventionYAML` structs and upserts each into the `conventions` table
 - Called automatically by the indexer after Go and proto indexing
+
+### indexer/light.go
+- `RunFilesLight(files)`: fast AST-only reindex (~50ms per file including DB ops)
+- Parses with `go/parser` — no `go/packages`, no type-checking
+- Builds symbol IDs in the same `pkg/path.Type.Method` format as the full indexer
+- `resolvePackagePath`: walks up to find `go.mod`, computes package path from
+  relative directory — avoids needing `go/packages` for package resolution
+- Extracts AST-level call edges: same-package calls by name, cross-package via
+  store lookup (`GetByName`). Accurate for unambiguous names, skips ambiguous
+- Bodies read from disk (same as full indexer) for non-generated files
+- Used by the watcher for immediate on-save updates
+
+### indexer/watcher.go
+- `Watcher`: fsnotify-based file watcher with hybrid two-phase reindex
+- Phase 1 (immediate): `RunFilesLight` on save — fixes line numbers in ~50ms
+- Phase 2 (debounced): `RunFiles` after configurable delay (default 2s) — restores
+  accurate call edges and type information
+- Watches recursively, auto-adds new directories, skips hidden/vendor/node_modules
+- Only triggers on `.go` file writes/creates
+- Debounce batches rapid saves into a single full reindex
+- Started as a goroutine in the MCP server via `--watch` flag
 
 ### protoindexer/indexer.go
 - Walks the configured directory for `.proto` files
@@ -369,11 +394,17 @@ Add to `.mcp.json` in your project root. Claude Code picks it up automatically.
     "scout": {
       "type": "stdio",
       "command": "scout-server",
-      "args": ["--db", "/your/project/.scout/index.db"],
+      "args": ["--db", "/your/project/.scout/index.db",
+               "--watch", "/your/project"],
       "env": {}
     }
   }
 }
 ```
+
+The `--watch` flag enables live reindexing: when a `.go` file is saved, the
+server updates symbols and line numbers immediately (~50ms via AST-only parse),
+then runs a full type-checked reindex after a 2s debounce (~1.5-2s) to restore
+accurate call edges. Without `--watch`, the index is static.
 
 If `scout-server` is not on your `$PATH`, use the full path (e.g. `~/go/bin/scout-server`).
