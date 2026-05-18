@@ -3,7 +3,7 @@
 ## What We Are Building
 
 A **Model Context Protocol (MCP) server** that gives Claude Code fast,
-token-efficient navigation of a Go codebase. Instead of Claude reading files
+token-efficient navigation of a Go and TypeScript codebase. Instead of Claude reading files
 blindly and burning tokens on irrelevant code, it calls tools that return only
 the symbols relevant to the task at hand.
 
@@ -28,9 +28,9 @@ to orient, fetches full source only when it's about to act.
 ## Architecture
 
 ```
-your codebase (.go + .proto files)
-        ↓  go/packages (type-checked AST) + proto parser
-    indexer + protoindexer
+your codebase (.go + .proto + .ts/.tsx files)
+        ↓  go/packages (type-checked AST) + proto parser + ts-callgraph
+    indexer + protoindexer + tsindexer
         ↓  upsert
     store (SQLite)
       ├── symbols table (id, kind, signature, docstring, file, lines, body)
@@ -123,6 +123,9 @@ scout/
 ├── protoindexer/
 │   └── indexer.go          — Parses .proto files, extracts services, RPCs,
 │                             messages, and enums, writes to store
+├── tsindexer/
+│   └── indexer.go          — Shells out to ts-callgraph, parses JSON output,
+│                             writes TypeScript symbols and edges to store
 ├── store/
 │   └── store.go            — SQLite schema + CRUD: symbols, FTS, edges
 ├── query/
@@ -187,7 +190,9 @@ scout/
 - Triggers on `.go` and `.proto` file writes/creates
 - Go files: two-phase (light immediate + full debounced)
 - Proto files: immediate single-phase reindex (parser is fast, no type-checking)
-- Debounce batches rapid Go saves into a single full reindex
+- TS/TSX files: debounced-only full reindex (TS compiler needs whole program)
+- `.d.ts` files are ignored
+- Debounce batches rapid saves into a single reindex per language
 - Started as a goroutine in the MCP server via `--watch` flag
 
 ### protoindexer/indexer.go
@@ -198,6 +203,16 @@ scout/
   found — this gives get_body full proto message/enum/service definitions
 - `RunFiles(files)`: incremental reindex for specific proto files, used by watcher
 - Supports `ExcludePaths` to skip generated or vendor directories
+
+### tsindexer/indexer.go
+- Shells out to `ts-callgraph` CLI (or `node /path/to/cli.js`) via `exec.Command`
+- Parses JSON stdout into Go structs matching ts-callgraph's `Output` type
+- Symbol kinds from TS: "func", "method", "class", "interface", "type", "enum", "const"
+- Edge kinds: "calls", "implements", "uses_type" — same as Go indexer
+- `Run()`: full reindex — clears stale TS files not in output, upserts all symbols/edges
+- `RunFiles()`: delegates to `Run()` because the TS compiler needs the full program
+- `Config.Command` + `Config.CommandArgs` allow `node /path/to/cli.js` invocation
+- Requires `ts-callgraph` npm package (github.com/urechandro/ts-callgraph)
 
 ### store/store.go
 - `symbols` table: primary store, keyed by fully-qualified symbol ID
@@ -317,6 +332,7 @@ Key findings:
 ```
 golang.org/x/tools v0.26.0   — go/packages for type-checked AST parsing
 modernc.org/sqlite v1.30.0   — pure Go SQLite driver (CGO_ENABLED=1 for perf)
+ts-callgraph (npm)           — TypeScript symbol/edge extraction (optional, for TS indexing)
 ```
 
 ## Running It
@@ -346,6 +362,19 @@ methods are filtered out to avoid boilerplate bloat.
 ```sh
 scout-index --db /your/project/.scout/index.db --root /your/project \
   --files path/to/changed.go,other.go
+```
+
+### Full index with TypeScript
+```sh
+scout-index --db /your/project/.scout/index.db --root /your/project \
+  --tsconfig /your/project/tsconfig.json
+```
+
+If `ts-callgraph` is not globally installed, point to the CLI script:
+```sh
+scout-index --db /your/project/.scout/index.db --root /your/project \
+  --tsconfig /your/project/tsconfig.json \
+  --ts-command "node /path/to/ts-callgraph/dist/cli.js"
 ```
 
 ### Inspect the index
@@ -405,9 +434,27 @@ Add to `.mcp.json` in your project root. Claude Code picks it up automatically.
 }
 ```
 
+For TypeScript projects, add `--tsconfig` and optionally `--ts-command`:
+```json
+{
+  "mcpServers": {
+    "scout": {
+      "type": "stdio",
+      "command": "scout-server",
+      "args": ["--db", "/your/project/.scout/index.db",
+               "--watch", "/your/project",
+               "--tsconfig", "/your/project/tsconfig.json",
+               "--ts-command", "node /path/to/ts-callgraph/dist/cli.js"],
+      "env": {}
+    }
+  }
+}
+```
+
 The `--watch` flag enables live reindexing: when a `.go` file is saved, the
 server updates symbols and line numbers immediately (~50ms via AST-only parse),
 then runs a full type-checked reindex after a 2s debounce (~1.5-2s) to restore
-accurate call edges. Without `--watch`, the index is static.
+accurate call edges. When `--tsconfig` is set, `.ts`/`.tsx` saves trigger a
+debounced full reindex via ts-callgraph. Without `--watch`, the index is static.
 
 If `scout-server` is not on your `$PATH`, use the full path (e.g. `~/go/bin/scout-server`).

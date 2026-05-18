@@ -5,16 +5,20 @@ import (
 	"flag"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/urechandro/scout/indexer"
 	"github.com/urechandro/scout/mcp"
 	"github.com/urechandro/scout/query"
 	"github.com/urechandro/scout/store"
+	"github.com/urechandro/scout/tsindexer"
 )
 
 func main() {
 	dbPath := flag.String("db", "/data/index.db", "Path to SQLite database.")
 	watch := flag.String("watch", "", "Root directory to watch for file changes (enables live reindexing).")
+	tsconfig := flag.String("tsconfig", "", "Path to tsconfig.json for TypeScript live reindexing (requires --watch).")
+	tsCommand := flag.String("ts-command", "ts-callgraph", "Path to ts-callgraph binary.")
 	debug := flag.Bool("debug", false, "Enable debug logging.")
 	flag.Parse()
 
@@ -38,7 +42,17 @@ func main() {
 			Dir:      *watch,
 			Patterns: []string{"./..."},
 		}, s)
-		w := indexer.NewWatcher(idx, s, indexer.WatcherConfig{Root: *watch})
+		wcfg := indexer.WatcherConfig{Root: *watch}
+		if *tsconfig != "" {
+			tsBin, tsArgs := parseTSCommand(*tsCommand)
+			wcfg.TSIndexer = tsindexer.New(tsindexer.Config{
+				TsconfigPath: *tsconfig,
+				Root:         *watch,
+				Command:      tsBin,
+				CommandArgs:  tsArgs,
+			}, s)
+		}
+		w := indexer.NewWatcher(idx, s, wcfg)
 		go func() {
 			if err := w.Run(); err != nil {
 				logger.Error("watcher error", "err", err)
@@ -53,4 +67,12 @@ func main() {
 		logger.Error("server error", "err", err)
 		os.Exit(1)
 	}
+}
+
+func parseTSCommand(cmd string) (string, []string) {
+	parts := strings.Fields(cmd)
+	if len(parts) == 0 {
+		return "ts-callgraph", nil
+	}
+	return parts[0], parts[1:]
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/urechandro/scout/protoindexer"
 	"github.com/urechandro/scout/store"
+	"github.com/urechandro/scout/tsindexer"
 )
 
 // Watcher monitors a directory tree for Go and proto file changes and triggers
@@ -21,6 +22,7 @@ import (
 type Watcher struct {
 	idx          *Indexer
 	protoIdx     *protoindexer.Indexer
+	tsIdx        *tsindexer.Indexer
 	store        *store.Store
 	root         string
 	fullDebounce time.Duration
@@ -28,6 +30,10 @@ type Watcher struct {
 	mu          sync.Mutex
 	pendingFull map[string]bool
 	fullTimer   *time.Timer
+
+	tsMu      sync.Mutex
+	tsChanged bool
+	tsTimer   *time.Timer
 }
 
 // WatcherConfig controls watcher behavior.
@@ -37,6 +43,9 @@ type WatcherConfig struct {
 	// FullDebounce is the delay before running the full Go reindex after a save.
 	// Default: 2 seconds.
 	FullDebounce time.Duration
+	// TSIndexer is an optional TypeScript indexer. When set, the watcher
+	// monitors .ts/.tsx files and triggers debounced reindexing.
+	TSIndexer *tsindexer.Indexer
 }
 
 // NewWatcher creates a file watcher for the given indexer and store.
@@ -51,6 +60,7 @@ func NewWatcher(idx *Indexer, s *store.Store, cfg WatcherConfig) *Watcher {
 		protoIdx: protoindexer.New(protoindexer.Config{
 			Dir: cfg.Root,
 		}, s),
+		tsIdx:        cfg.TSIndexer,
 		root:         cfg.Root,
 		fullDebounce: debounce,
 		pendingFull:  make(map[string]bool),
@@ -69,7 +79,11 @@ func (w *Watcher) Run() error {
 		return err
 	}
 
-	log.Printf("watcher: monitoring %s for .go and .proto file changes", w.root)
+	kinds := ".go and .proto"
+	if w.tsIdx != nil {
+		kinds += " and .ts/.tsx"
+	}
+	log.Printf("watcher: monitoring %s for %s file changes", w.root, kinds)
 
 	for {
 		select {
@@ -109,6 +123,8 @@ func (w *Watcher) handleEvent(event fsnotify.Event, watcher *fsnotify.Watcher) {
 		w.handleGoChange(path)
 	case isProtoSource(path):
 		w.handleProtoChange(path)
+	case isTSSource(path):
+		w.handleTSChange(path)
 	}
 }
 
@@ -187,10 +203,50 @@ func (w *Watcher) shouldSkipDir(name string) bool {
 	return false
 }
 
+func (w *Watcher) handleTSChange(path string) {
+	if w.tsIdx == nil {
+		return
+	}
+
+	log.Printf("watcher: ts change detected %s", filepath.Base(path))
+
+	w.tsMu.Lock()
+	w.tsChanged = true
+	if w.tsTimer != nil {
+		w.tsTimer.Stop()
+	}
+	w.tsTimer = time.AfterFunc(w.fullDebounce, w.runTSReindex)
+	w.tsMu.Unlock()
+}
+
+func (w *Watcher) runTSReindex() {
+	w.tsMu.Lock()
+	if !w.tsChanged {
+		w.tsMu.Unlock()
+		return
+	}
+	w.tsChanged = false
+	w.tsMu.Unlock()
+
+	start := time.Now()
+	if err := w.tsIdx.Run(); err != nil {
+		log.Printf("watcher: ts reindex failed: %v", err)
+		return
+	}
+	log.Printf("watcher: ts reindex (%v)", time.Since(start))
+}
+
 func isGoSource(path string) bool {
 	return strings.HasSuffix(path, ".go")
 }
 
 func isProtoSource(path string) bool {
 	return strings.HasSuffix(path, ".proto")
+}
+
+func isTSSource(path string) bool {
+	if strings.HasSuffix(path, ".d.ts") {
+		return false
+	}
+	return strings.HasSuffix(path, ".ts") || strings.HasSuffix(path, ".tsx")
 }

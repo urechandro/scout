@@ -181,6 +181,33 @@ func (s *Store) UpsertEdge(edge Edge) error {
 	return nil
 }
 
+// GetFilesByExtensions returns distinct file paths that end with any of the
+// given extensions (e.g. ".ts", ".tsx").
+func (s *Store) GetFilesByExtensions(exts []string) ([]string, error) {
+	placeholders := make([]string, len(exts))
+	args := make([]any, len(exts))
+	for i, ext := range exts {
+		placeholders[i] = "file LIKE ?"
+		args[i] = "%" + ext
+	}
+	query := fmt.Sprintf(`SELECT DISTINCT file FROM symbols WHERE %s`, strings.Join(placeholders, " OR "))
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("get files by extensions: %w", err)
+	}
+	defer rows.Close()
+
+	var files []string
+	for rows.Next() {
+		var f string
+		if err := rows.Scan(&f); err != nil {
+			return nil, err
+		}
+		files = append(files, f)
+	}
+	return files, rows.Err()
+}
+
 // DeleteEdgesByKind removes all edges of a given kind (e.g. "calls").
 // Used to clear stale call edges before writing SSA-based ones.
 func (s *Store) DeleteEdgesByKind(kind string) error {

@@ -12,6 +12,7 @@ import (
 	"github.com/urechandro/scout/indexer"
 	"github.com/urechandro/scout/protoindexer"
 	"github.com/urechandro/scout/store"
+	"github.com/urechandro/scout/tsindexer"
 )
 
 func main() {
@@ -26,6 +27,8 @@ func main() {
 	exclude := flag.String("exclude", "", "Comma-separated package path substrings to skip, e.g. cmd/localserver,cmd/migration.")
 	method := flag.String("method", "rta", "Call graph algorithm: rta (precise, default) or cha (fast, conservative). Only used for full index.")
 	deps := flag.Bool("deps", false, "Index exported signatures from external dependency packages.")
+	tsconfig := flag.String("tsconfig", "", "Path to tsconfig.json for TypeScript indexing.")
+	tsCommand := flag.String("ts-command", "ts-callgraph", "Path to ts-callgraph binary.")
 	flag.Parse()
 
 	s, err := store.New(*dbPath)
@@ -125,6 +128,26 @@ func main() {
 		logger.Warn("conventions index failed", "err", err)
 	}
 
+	// Index TypeScript files if --tsconfig is set.
+	if *tsconfig != "" {
+		tsRoot := *root
+		if *dir != "" {
+			tsRoot = *dir
+		}
+		tsBin, tsArgs := parseTSCommand(*tsCommand)
+		tidx := tsindexer.New(tsindexer.Config{
+			TsconfigPath: *tsconfig,
+			Root:         tsRoot,
+			Command:      tsBin,
+			CommandArgs:  tsArgs,
+		}, s)
+		logger.Info("indexing typescript", "tsconfig", *tsconfig)
+		if err := tidx.Run(); err != nil {
+			logger.Error("ts index failed", "err", err)
+			os.Exit(1)
+		}
+	}
+
 	if err := s.SetMeta("last_indexed", fmt.Sprintf("%d", nowUnix())); err != nil {
 		logger.Warn("set meta failed", "err", err)
 	}
@@ -187,6 +210,16 @@ func findModuleDirs(root string) ([]string, error) {
 		return nil
 	})
 	return dirs, err
+}
+
+// parseTSCommand splits a ts-command flag value like "node /path/to/cli.js"
+// into the binary and extra args.
+func parseTSCommand(cmd string) (string, []string) {
+	parts := strings.Fields(cmd)
+	if len(parts) == 0 {
+		return "ts-callgraph", nil
+	}
+	return parts[0], parts[1:]
 }
 
 func nowUnix() int64 {
