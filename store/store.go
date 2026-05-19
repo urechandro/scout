@@ -4,6 +4,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	_ "modernc.org/sqlite"
@@ -46,6 +47,10 @@ type Store struct {
 
 // New opens (or creates) the SQLite database at the given path.
 func New(path string) (*Store, error) {
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve db path: %w", err)
+	}
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite at %s: %w", path, err)
