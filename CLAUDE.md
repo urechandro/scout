@@ -98,8 +98,9 @@ includes a template.
 over stdio. All the logic lives in the indexer and query engine as plain Go
 packages. The server just wires them together.
 
-**Go install, no container.** The indexer and server are installed as plain Go
-binaries via `go install`. The target machine needs Go available because
+**Single binary, subcommand CLI.** Everything ships as one `scout` binary with
+subcommands: `scout init`, `scout index`, `scout reindex`, `scout serve`. One
+`go install` installs the full tool. The target machine needs Go available because
 `go/packages` shells out to `go list` to resolve types.
 
 **Dependency signatures on demand.** With `--deps`, the indexer walks
@@ -115,8 +116,11 @@ keeps the agent in scout's fast path when it encounters imported types like
 ```
 scout/
 ├── cmd/
-│   ├── scout-index/main.go — CLI: run full or incremental index
-│   └── scout-server/main.go — CLI: run MCP server over stdio
+│   └── scout/
+│       ├── main.go   — Umbrella CLI: dispatches to subcommands
+│       ├── index.go  — scout index / scout reindex subcommands
+│       ├── serve.go  — scout serve subcommand (MCP server)
+│       └── init.go   — scout init subcommand (TUI setup wizard)
 ├── indexer/
 │   ├── indexer.go          — Parses Go packages via go/packages, extracts
 │   │                         symbols and call edges, writes to store
@@ -347,59 +351,46 @@ ts-callgraph (npm)           — TypeScript symbol/edge extraction (optional, fo
 
 ### Install
 ```sh
-go install github.com/urechandro/scout/cmd/scout-index@latest
-go install github.com/urechandro/scout/cmd/scout-server@latest
-go install github.com/urechandro/scout/cmd/scout-init@latest
+go install github.com/urechandro/scout/cmd/scout@latest
 ```
 
 ### Bootstrap a new project
 ```sh
-# One command: creates .scout/, .gitignore entry, .mcp.json, CLAUDE.md block,
-# conventions.yaml starter, then runs a full index with --deps.
-scout-init --root /your/project
+# Interactive TUI wizard: sets up .scout/, .mcp.json, CLAUDE.md block,
+# optional conventions.yaml, then runs a full index.
+scout init
 ```
 
-Flags:
-- `--db` — override database path (default: `<root>/.scout/index.db`)
-- `--tsconfig` — tsconfig.json for TypeScript (auto-detected if absent)
+Flags (all optional — TUI prompts for them interactively):
+- `--root` — project root (default: `.`)
+- `--db` — database path (default: `<root>/.scout/index.db`)
+- `--tsconfig` — tsconfig.json for TypeScript (auto-detected)
 - `--ts-command` — ts-callgraph binary (default: `ts-callgraph`)
 - `--exclude` — comma-separated package substrings to skip
 - `--skip-index` — write config files only, skip the indexer
+- `--yes` / `-y` — non-interactive, accept all defaults (CI-safe)
 
-Re-running `scout-init` is safe: it merges `.mcp.json`, replaces the
+Re-running `scout init` is safe: it merges `.mcp.json`, replaces the
 `<!-- scout -->` block in CLAUDE.md idempotently, and skips `conventions.yaml`
 if it already exists.
 
 ### Full index
 ```sh
-scout-index --db /your/project/.scout/index.db --root /your/project
+scout index --db /your/project/.scout/index.db --root /your/project
+scout index --db /your/project/.scout/index.db --root /your/project --deps
 ```
 
-### Full index with dependency signatures
-```sh
-scout-index --db /your/project/.scout/index.db --root /your/project --deps
-```
-
-`--deps` indexes exported signatures (no bodies) from external dependency
-packages. This makes imported types like `grpc.ClientConn`, `codes.NotFound`,
-and SDK types discoverable via FTS and exact name lookup. Proto-generated dep
-methods are filtered out to avoid boilerplate bloat.
+`--deps` indexes exported signatures from external dependency packages.
 
 ### Incremental reindex
 ```sh
-scout-index --db /your/project/.scout/index.db --root /your/project \
+scout reindex --db /your/project/.scout/index.db \
   --files path/to/changed.go,other.go
 ```
 
 ### Full index with TypeScript
 ```sh
-scout-index --db /your/project/.scout/index.db --root /your/project \
-  --tsconfig /your/project/tsconfig.json
-```
-
-If `ts-callgraph` is not globally installed, point to the CLI script:
-```sh
-scout-index --db /your/project/.scout/index.db --root /your/project \
+scout index --db /your/project/.scout/index.db --root /your/project \
   --tsconfig /your/project/tsconfig.json \
   --ts-command "node /path/to/ts-callgraph/dist/cli.js"
 ```
@@ -445,15 +436,15 @@ The indexer loads `conventions.yaml` automatically on every run. Claude calls
 `get_conventions("topic")` to retrieve the pattern before implementing it.
 
 ### Wire up Claude Code
-Add to `.mcp.json` in your project root. Claude Code picks it up automatically.
+`scout init` generates `.mcp.json` automatically. To wire it up manually:
 
 ```json
 {
   "mcpServers": {
     "scout": {
       "type": "stdio",
-      "command": "scout-server",
-      "args": ["--db", "/your/project/.scout/index.db",
+      "command": "scout",
+      "args": ["serve", "--db", "/your/project/.scout/index.db",
                "--watch", "/your/project"],
       "env": {}
     }
@@ -467,8 +458,8 @@ For TypeScript projects, add `--tsconfig` and optionally `--ts-command`:
   "mcpServers": {
     "scout": {
       "type": "stdio",
-      "command": "scout-server",
-      "args": ["--db", "/your/project/.scout/index.db",
+      "command": "scout",
+      "args": ["serve", "--db", "/your/project/.scout/index.db",
                "--watch", "/your/project",
                "--tsconfig", "/your/project/tsconfig.json",
                "--ts-command", "node /path/to/ts-callgraph/dist/cli.js"],

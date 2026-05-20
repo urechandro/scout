@@ -1,11 +1,8 @@
-// Command server runs the MCP server over stdio.
 package main
 
 import (
 	"flag"
-	"log/slog"
 	"os"
-	"strings"
 
 	"github.com/urechandro/scout/indexer"
 	"github.com/urechandro/scout/mcp"
@@ -14,21 +11,16 @@ import (
 	"github.com/urechandro/scout/tsindexer"
 )
 
-func main() {
-	dbPath := flag.String("db", "/data/index.db", "Path to SQLite database.")
-	watch := flag.String("watch", "", "Root directory to watch for file changes (enables live reindexing).")
-	tsconfig := flag.String("tsconfig", "", "Path to tsconfig.json for TypeScript live reindexing (requires --watch).")
-	tsCommand := flag.String("ts-command", "ts-callgraph", "Path to ts-callgraph binary.")
-	debug := flag.Bool("debug", false, "Enable debug logging.")
-	flag.Parse()
+func cmdServe(args []string) {
+	fs := flag.NewFlagSet("scout serve", flag.ExitOnError)
+	dbPath := fs.String("db", "/data/index.db", "Path to SQLite database.")
+	watch := fs.String("watch", "", "Root directory to watch for file changes (enables live reindexing).")
+	tsconfig := fs.String("tsconfig", "", "Path to tsconfig.json for TypeScript live reindexing (requires --watch).")
+	tsCommand := fs.String("ts-command", "ts-callgraph", "Path to ts-callgraph binary.")
+	debug := fs.Bool("debug", false, "Enable debug logging.")
+	_ = fs.Parse(args)
 
-	level := slog.LevelInfo
-	if *debug {
-		level = slog.LevelDebug
-	}
-
-	// MCP uses stdio for the protocol, so logs must go to stderr only.
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	logger := newLogger(*debug)
 
 	s, err := store.New(*dbPath)
 	if err != nil {
@@ -67,12 +59,4 @@ func main() {
 		logger.Error("server error", "err", err)
 		os.Exit(1)
 	}
-}
-
-func parseTSCommand(cmd string) (string, []string) {
-	parts := strings.Fields(cmd)
-	if len(parts) == 0 {
-		return "ts-callgraph", nil
-	}
-	return parts[0], parts[1:]
 }
