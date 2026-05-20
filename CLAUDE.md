@@ -68,6 +68,14 @@ with pointers, then promotes to hot via `get_body` only for symbols it's about
 to act on. `get_body` returns a `references` field with up to 10 summaries of
 referenced types/functions — enough to understand dependencies without extra calls.
 
+**Session boundary rule: `/new` when the next question requires source lines.**
+Exploration queries (`get_relevant_context`, `get_impact`, `get_callers`) return
+signatures and pointers — cheap, safe to chain in one session. The moment the
+next question can only be answered by reading source lines (`get_body`, `get_flow`,
+`get_pattern`), that is the trigger: write a 2-3 sentence decision summary, open
+a new session, and paste it in. Carrying exploration context into implementation
+turns multiplies re-read cost on every subsequent token.
+
 **Exact name lookup before FTS.** The query engine's primary retrieval path is
 exact name lookup for compound identifiers (PascalCase/camelCase). FTS is the
 fallback for natural language queries. This solved a major precision problem:
@@ -319,6 +327,11 @@ Key findings:
 ## Known Issues / Next Steps
 
 ### High value
+- **`scout init` bootstrap command** — single command to set up scout in a new
+  project. Creates `.scout/` dir + `.gitignore` entry, generates `.mcp.json`
+  with resolved binary paths, creates/appends CLAUDE.md instructions (idempotent
+  via `<!-- scout -->` marker), scaffolds `conventions.yaml`, auto-detects
+  project type (go.mod, tsconfig.json, .proto), and runs full index with `--deps`.
 - **"Find simplest example" queries** — "which RPC has the fewest dependencies?"
   isn't expressible in the current tool set. The model has to call get_pattern
   on several RPCs and compare manually.
