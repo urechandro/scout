@@ -327,11 +327,6 @@ Key findings:
 ## Known Issues / Next Steps
 
 ### High value
-- **`scout init` bootstrap command** — single command to set up scout in a new
-  project. Creates `.scout/` dir + `.gitignore` entry, generates `.mcp.json`
-  with resolved binary paths, creates/appends CLAUDE.md instructions (idempotent
-  via `<!-- scout -->` marker), scaffolds `conventions.yaml`, auto-detects
-  project type (go.mod, tsconfig.json, .proto), and runs full index with `--deps`.
 - **"Find simplest example" queries** — "which RPC has the fewest dependencies?"
   isn't expressible in the current tool set. The model has to call get_pattern
   on several RPCs and compare manually.
@@ -354,7 +349,26 @@ ts-callgraph (npm)           — TypeScript symbol/edge extraction (optional, fo
 ```sh
 go install github.com/urechandro/scout/cmd/scout-index@latest
 go install github.com/urechandro/scout/cmd/scout-server@latest
+go install github.com/urechandro/scout/cmd/scout-init@latest
 ```
+
+### Bootstrap a new project
+```sh
+# One command: creates .scout/, .gitignore entry, .mcp.json, CLAUDE.md block,
+# conventions.yaml starter, then runs a full index with --deps.
+scout-init --root /your/project
+```
+
+Flags:
+- `--db` — override database path (default: `<root>/.scout/index.db`)
+- `--tsconfig` — tsconfig.json for TypeScript (auto-detected if absent)
+- `--ts-command` — ts-callgraph binary (default: `ts-callgraph`)
+- `--exclude` — comma-separated package substrings to skip
+- `--skip-index` — write config files only, skip the indexer
+
+Re-running `scout-init` is safe: it merges `.mcp.json`, replaces the
+`<!-- scout -->` block in CLAUDE.md idempotently, and skips `conventions.yaml`
+if it already exists.
 
 ### Full index
 ```sh
