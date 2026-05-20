@@ -3,6 +3,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -11,14 +12,16 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/charmbracelet/huh"
 )
 
 const scoutStart = "<!-- scout -->"
 const scoutEnd = "<!-- /scout -->"
 
-// claudeMDBlock is appended to or replaces the <!-- scout --> section in CLAUDE.md.
-// Based on benchmark findings: "Only if" gating and explicit prohibition on
-// grep/find/Read are the two most impactful instructions.
+// claudeMDBlock is the <!-- scout --> section written to CLAUDE.md.
+// Based on benchmark findings: "Only if" gating and the explicit prohibition
+// on grep/find/Read are the two highest-impact instructions.
 const claudeMDBlock = scoutStart + `
 ## Code Navigation — Use Scout Tools
 
@@ -68,6 +71,19 @@ const conventionsStarter = `# conventions.yaml — Architectural pattern registr
 #     - yourpkg.TypeName.MethodName
 `
 
+// wizardConfig holds all settings collected by the TUI or derived from flags.
+type wizardConfig struct {
+	Root                string
+	DBPath              string
+	Languages           []string // "go", "ts", "proto"
+	TSConfig            string
+	TSCommand           string
+	Exclude             string
+	IndexDeps           bool
+	EnableWatch         bool
+	ScaffoldConventions bool
+}
+
 type mcpServer struct {
 	Type    string            `json:"type"`
 	Command string            `json:"command"`
@@ -80,79 +96,84 @@ type mcpFile struct {
 }
 
 func main() {
-	root := flag.String("root", ".", "Project root to initialize (default: current directory).")
-	db := flag.String("db", "", "SQLite database path (default: <root>/.scout/index.db).")
-	tsconfig := flag.String("tsconfig", "", "tsconfig.json path for TypeScript indexing (auto-detected if absent).")
-	tsCommand := flag.String("ts-command", "ts-callgraph", "ts-callgraph binary or 'node /path/to/cli.js'.")
-	exclude := flag.String("exclude", "", "Comma-separated package path substrings to skip during indexing.")
-	skipIndex := flag.Bool("skip-index", false, "Write config files only; skip running the indexer.")
+	rootFlag := flag.String("root", ".", "Project root to initialize.")
+	dbFlag := flag.String("db", "", "SQLite database path (default: <root>/.scout/index.db).")
+	tsconfigFlag := flag.String("tsconfig", "", "tsconfig.json path (auto-detected if absent).")
+	tsCommandFlag := flag.String("ts-command", "ts-callgraph", "ts-callgraph binary or 'node /path/to/cli.js'.")
+	excludeFlag := flag.String("exclude", "", "Comma-separated package path substrings to skip.")
+	skipIndexFlag := flag.Bool("skip-index", false, "Write config files only; skip running the indexer.")
+	yes := flag.Bool("yes", false, "Non-interactive: accept all defaults (CI-safe).")
+	flag.BoolVar(yes, "y", false, "Alias for --yes.")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	absRoot, err := filepath.Abs(*root)
+	absRoot, err := filepath.Abs(*rootFlag)
 	if err != nil {
 		logger.Error("resolve root", "err", err)
 		os.Exit(1)
 	}
 
-	dbPath := *db
-	if dbPath == "" {
-		dbPath = filepath.Join(absRoot, ".scout", "index.db")
+	detected := detectProjectType(absRoot)
+	conventionsExist := checkConventionsExist(absRoot)
+
+	cfg := buildDefaults(absRoot, *dbFlag, *tsconfigFlag, *tsCommandFlag, *excludeFlag, *skipIndexFlag, detected, conventionsExist)
+
+	if shouldRunTUI(*yes) {
+		if err := runWizard(&cfg, conventionsExist); err != nil {
+			if errors.Is(err, huh.ErrUserAborted) {
+				fmt.Fprintln(os.Stderr, "Aborted.")
+				os.Exit(0)
+			}
+			logger.Error("wizard error", "err", err)
+			os.Exit(1)
+		}
 	}
-	absDB, err := filepath.Abs(dbPath)
+
+	// Re-resolve absolute paths — user may have edited Root in the wizard.
+	absRoot, err = filepath.Abs(cfg.Root)
+	if err != nil {
+		logger.Error("resolve root", "err", err)
+		os.Exit(1)
+	}
+	absDB, err := filepath.Abs(cfg.DBPath)
 	if err != nil {
 		logger.Error("resolve db path", "err", err)
 		os.Exit(1)
 	}
 
-	// 1. Create .scout/ directory.
+	printSummary(cfg)
+
 	if err := os.MkdirAll(filepath.Dir(absDB), 0o755); err != nil {
 		logger.Error("create .scout dir", "err", err)
 		os.Exit(1)
 	}
 	logger.Info("ensured .scout/")
 
-	// 2. Add .scout/ to .gitignore.
 	if err := ensureGitignore(absRoot, logger); err != nil {
 		logger.Warn("gitignore update", "err", err)
 	}
 
-	// 3. Detect project type (go, ts, proto).
-	detected := detectProjectType(absRoot)
-	logger.Info("detected project type", "types", strings.Join(detected, "+"))
-
-	// Auto-detect tsconfig if not provided and project has TypeScript.
-	if *tsconfig == "" && contains(detected, "ts") {
-		if found := detectTSConfig(absRoot); found != "" {
-			*tsconfig = found
-			logger.Info("auto-detected tsconfig", "path", *tsconfig)
-		}
-	}
-
-	// 4. Resolve scout-server binary.
 	serverBin := resolveBin("scout-server", logger)
 
-	// 5. Write .mcp.json (merge with existing, don't clobber other servers).
-	if err := writeMCPJSON(absRoot, absDB, serverBin, *tsconfig, *tsCommand, logger); err != nil {
+	if err := writeMCPJSON(absRoot, absDB, serverBin, cfg.TSConfig, cfg.TSCommand, cfg.EnableWatch, logger); err != nil {
 		logger.Error("write .mcp.json", "err", err)
 		os.Exit(1)
 	}
 
-	// 6. Update CLAUDE.md (idempotent via <!-- scout --> marker).
 	if err := updateCLAUDEMD(absRoot, logger); err != nil {
 		logger.Error("update CLAUDE.md", "err", err)
 		os.Exit(1)
 	}
 
-	// 7. Scaffold conventions.yaml if absent.
-	if err := scaffoldConventions(absRoot, logger); err != nil {
-		logger.Warn("scaffold conventions.yaml", "err", err)
+	if cfg.ScaffoldConventions {
+		if err := scaffoldConventions(absRoot, logger); err != nil {
+			logger.Warn("scaffold conventions.yaml", "err", err)
+		}
 	}
 
-	// 8. Run full index with --deps.
-	if !*skipIndex {
-		if err := runIndex(absRoot, absDB, *tsconfig, *tsCommand, *exclude, logger); err != nil {
+	if cfg.IndexDeps {
+		if err := runIndex(absRoot, absDB, cfg.TSConfig, cfg.TSCommand, cfg.Exclude, logger); err != nil {
 			logger.Error("indexing failed", "err", err)
 			os.Exit(1)
 		}
@@ -161,7 +182,132 @@ func main() {
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "scout init complete!")
 	fmt.Fprintln(os.Stderr, "  1. Reload Claude Code to pick up the MCP server.")
-	fmt.Fprintln(os.Stderr, "  2. Customize conventions.yaml with your project's patterns.")
+	if cfg.ScaffoldConventions {
+		fmt.Fprintln(os.Stderr, "  2. Customize conventions.yaml with your project's patterns.")
+	}
+}
+
+// shouldRunTUI returns true when stdin is an interactive terminal and --yes was not set.
+func shouldRunTUI(yes bool) bool {
+	if yes {
+		return false
+	}
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return (fi.Mode() & os.ModeCharDevice) != 0
+}
+
+// buildDefaults populates a wizardConfig from flags and auto-detection.
+func buildDefaults(absRoot, dbFlag, tsconfigFlag, tsCommand, exclude string, skipIndex bool, detected []string, conventionsExist bool) wizardConfig {
+	dbPath := dbFlag
+	if dbPath == "" {
+		dbPath = filepath.Join(absRoot, ".scout", "index.db")
+	}
+
+	tsconfig := tsconfigFlag
+	if tsconfig == "" && slices.Contains(detected, "ts") {
+		tsconfig = detectTSConfig(absRoot)
+	}
+
+	// Strip "unknown" — multi-select only shows real languages.
+	langs := make([]string, 0, len(detected))
+	for _, l := range detected {
+		if l != "unknown" {
+			langs = append(langs, l)
+		}
+	}
+
+	return wizardConfig{
+		Root:                absRoot,
+		DBPath:              dbPath,
+		Languages:           langs,
+		TSConfig:            tsconfig,
+		TSCommand:           tsCommand,
+		Exclude:             exclude,
+		IndexDeps:           !skipIndex,
+		EnableWatch:         true,
+		ScaffoldConventions: !conventionsExist,
+	}
+}
+
+// runWizard runs the huh TUI form and mutates cfg with the user's choices.
+func runWizard(cfg *wizardConfig, conventionsExist bool) error {
+	// Group 1: core project settings.
+	groupProject := huh.NewGroup(
+		huh.NewInput().
+			Title("Project root").
+			Description("Directory to initialize Scout in.").
+			Value(&cfg.Root),
+
+		huh.NewInput().
+			Title("Database path").
+			Description("Where to store the SQLite index.").
+			Value(&cfg.DBPath),
+
+		huh.NewMultiSelect[string]().
+			Title("Languages to index").
+			Options(
+				huh.NewOption("Go", "go"),
+				huh.NewOption("TypeScript", "ts"),
+				huh.NewOption("Protobuf", "proto"),
+			).
+			Value(&cfg.Languages),
+	)
+
+	// Group 2: tsconfig — only shown when TypeScript is selected.
+	// WithHideFunc is evaluated dynamically when the form navigates to this group.
+	groupTS := huh.NewGroup(
+		huh.NewInput().
+			Title("tsconfig.json path").
+			Description("Path to tsconfig.json for TypeScript indexing.").
+			Value(&cfg.TSConfig),
+	).WithHideFunc(func() bool {
+		return !slices.Contains(cfg.Languages, "ts")
+	})
+
+	// Group 3: behavior options.
+	groupBehavior := huh.NewGroup(
+		huh.NewConfirm().
+			Title("Run indexer now?").
+			Description("Runs scout-index --deps to build the initial index.").
+			Value(&cfg.IndexDeps),
+
+		huh.NewConfirm().
+			Title("Enable file watcher?").
+			Description("Adds --watch to the MCP server so the index updates on save.").
+			Value(&cfg.EnableWatch),
+	)
+
+	// Group 4: conventions — only shown when no conventions file exists yet.
+	groupConventions := huh.NewGroup(
+		huh.NewConfirm().
+			Title("Scaffold conventions.yaml?").
+			Description("Creates a starter file for documenting architectural patterns.").
+			Value(&cfg.ScaffoldConventions),
+	).WithHideFunc(func() bool {
+		return conventionsExist
+	})
+
+	return huh.NewForm(groupProject, groupTS, groupBehavior, groupConventions).
+		WithTheme(huh.ThemeCharm()).
+		Run()
+}
+
+// printSummary prints what scout is about to do before executing side effects.
+func printSummary(cfg wizardConfig) {
+	fmt.Fprintln(os.Stderr, "\nScout will configure the following:")
+	fmt.Fprintf(os.Stderr, "  Root:        %s\n", cfg.Root)
+	fmt.Fprintf(os.Stderr, "  DB:          %s\n", cfg.DBPath)
+	fmt.Fprintf(os.Stderr, "  Languages:   %s\n", strings.Join(cfg.Languages, ", "))
+	if cfg.TSConfig != "" {
+		fmt.Fprintf(os.Stderr, "  tsconfig:    %s\n", cfg.TSConfig)
+	}
+	fmt.Fprintf(os.Stderr, "  Watch:       %v\n", cfg.EnableWatch)
+	fmt.Fprintf(os.Stderr, "  Index now:   %v\n", cfg.IndexDeps)
+	fmt.Fprintf(os.Stderr, "  Conventions: %v\n", cfg.ScaffoldConventions)
+	fmt.Fprintln(os.Stderr)
 }
 
 // ensureGitignore adds .scout/ to .gitignore if it is not already listed.
@@ -200,8 +346,7 @@ func ensureGitignore(root string, logger *slog.Logger) error {
 
 // detectProjectType returns which languages/formats are present under root.
 func detectProjectType(root string) []string {
-	var types []string
-	hasGo, hasTS, hasProto := false, false, false
+	var hasGo, hasTS, hasProto bool
 
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -225,6 +370,7 @@ func detectProjectType(root string) []string {
 		return nil
 	})
 
+	var types []string
 	if hasGo {
 		types = append(types, "go")
 	}
@@ -262,6 +408,16 @@ func detectTSConfig(root string) string {
 	return found
 }
 
+// checkConventionsExist reports whether a conventions file already exists.
+func checkConventionsExist(root string) bool {
+	for _, name := range []string{"conventions.yaml", "conventions.yml"} {
+		if _, err := os.Stat(filepath.Join(root, name)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
 // resolveBin finds a binary in PATH, falling back to ~/go/bin/<name>.
 func resolveBin(name string, logger *slog.Logger) string {
 	if p, err := exec.LookPath(name); err == nil {
@@ -275,12 +431,11 @@ func resolveBin(name string, logger *slog.Logger) string {
 
 // writeMCPJSON writes or updates .mcp.json with the scout server entry.
 // Merges with any existing mcpServers entries to avoid clobbering other servers.
-func writeMCPJSON(root, dbPath, serverBin, tsconfig, tsCommand string, logger *slog.Logger) error {
+func writeMCPJSON(root, dbPath, serverBin, tsconfig, tsCommand string, enableWatch bool, logger *slog.Logger) error {
 	mcpPath := filepath.Join(root, ".mcp.json")
 
 	cfg := mcpFile{MCPServers: map[string]json.RawMessage{}}
 
-	// Read existing file if present.
 	if raw, err := os.ReadFile(mcpPath); err == nil {
 		if err := json.Unmarshal(raw, &cfg); err != nil {
 			logger.Warn(".mcp.json parse error, overwriting", "err", err)
@@ -288,8 +443,10 @@ func writeMCPJSON(root, dbPath, serverBin, tsconfig, tsCommand string, logger *s
 		}
 	}
 
-	// Build scout server args.
-	args := []string{"--db", dbPath, "--watch", root}
+	args := []string{"--db", dbPath}
+	if enableWatch {
+		args = append(args, "--watch", root)
+	}
 	if tsconfig != "" {
 		args = append(args, "--tsconfig", tsconfig)
 		if tsCommand != "" && tsCommand != "ts-callgraph" {
@@ -336,11 +493,9 @@ func updateCLAUDEMD(root string, logger *slog.Logger) error {
 
 	var updated string
 	if startIdx >= 0 && endIdx >= 0 && endIdx > startIdx {
-		// Replace existing block.
 		updated = content[:startIdx] + claudeMDBlock + content[endIdx+len(scoutEnd):]
 		logger.Info("replaced existing scout block in CLAUDE.md")
 	} else {
-		// Append block.
 		sep := ""
 		if len(content) > 0 && !strings.HasSuffix(content, "\n\n") {
 			if strings.HasSuffix(content, "\n") {
@@ -356,14 +511,8 @@ func updateCLAUDEMD(root string, logger *slog.Logger) error {
 	return os.WriteFile(claudePath, []byte(updated), 0o644)
 }
 
-// scaffoldConventions writes a starter conventions.yaml if one does not exist.
+// scaffoldConventions writes a starter conventions.yaml.
 func scaffoldConventions(root string, logger *slog.Logger) error {
-	for _, name := range []string{"conventions.yaml", "conventions.yml"} {
-		if _, err := os.Stat(filepath.Join(root, name)); err == nil {
-			logger.Info("conventions file already exists, skipping scaffold", "file", name)
-			return nil
-		}
-	}
 	path := filepath.Join(root, "conventions.yaml")
 	if err := os.WriteFile(path, []byte(conventionsStarter), 0o644); err != nil {
 		return err
@@ -376,11 +525,7 @@ func scaffoldConventions(root string, logger *slog.Logger) error {
 func runIndex(root, dbPath, tsconfig, tsCommand, exclude string, logger *slog.Logger) error {
 	indexBin := resolveBin("scout-index", logger)
 
-	args := []string{
-		"--db", dbPath,
-		"--root", root,
-		"--deps",
-	}
+	args := []string{"--db", dbPath, "--root", root, "--deps"}
 	if exclude != "" {
 		args = append(args, "--exclude", exclude)
 	}
@@ -393,11 +538,7 @@ func runIndex(root, dbPath, tsconfig, tsCommand, exclude string, logger *slog.Lo
 
 	logger.Info("running full index", "bin", indexBin, "root", root)
 	cmd := exec.Command(indexBin, args...)
-	cmd.Stdout = os.Stderr // index logs to stderr; mirror both streams to our stderr
+	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
-}
-
-func contains(slice []string, s string) bool {
-	return slices.Contains(slice, s)
 }
