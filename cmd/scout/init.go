@@ -73,6 +73,7 @@ type wizardConfig struct {
 	TSConfig            string
 	TSCommand           string
 	Exclude             string
+	Method              string // "rta", "cha", "ast"
 	IndexDeps           bool
 	EnableWatch         bool
 	ScaffoldConventions bool
@@ -169,7 +170,7 @@ func cmdInit(args []string) {
 	}
 
 	if cfg.IndexDeps {
-		if err := runInitIndex(absRoot, absDB, cfg.TSConfig, cfg.TSCommand, cfg.Exclude, logger); err != nil {
+		if err := runInitIndex(absRoot, absDB, cfg.TSConfig, cfg.TSCommand, cfg.Exclude, cfg.Method, logger); err != nil {
 			logger.Error("indexing failed", "err", err)
 			os.Exit(1)
 		}
@@ -219,6 +220,7 @@ func buildInitDefaults(absRoot, dbFlag, tsconfigFlag, tsCommand, exclude string,
 		TSConfig:            tsconfig,
 		TSCommand:           tsCommand,
 		Exclude:             exclude,
+		Method:              "rta",
 		IndexDeps:           !skipIndex,
 		EnableWatch:         true,
 		ScaffoldConventions: !conventionsExist,
@@ -258,6 +260,15 @@ func runWizard(cfg *wizardConfig, conventionsExist bool) error {
 	})
 
 	groupBehavior := huh.NewGroup(
+		huh.NewSelect[string]().
+			Title("Call graph method").
+			Options(
+				huh.NewOption("rta — precise, recommended for most projects", "rta"),
+				huh.NewOption("cha — fast, conservative (good for large codebases)", "cha"),
+				huh.NewOption("ast — fastest, no type info (CI / huge monorepos)", "ast"),
+			).
+			Value(&cfg.Method),
+
 		huh.NewConfirm().
 			Title("Run indexer now?").
 			Description("Runs scout index --deps to build the initial index.").
@@ -292,6 +303,7 @@ func printInitSummary(cfg wizardConfig) {
 	if cfg.TSConfig != "" {
 		fmt.Fprintf(os.Stderr, "  tsconfig:    %s\n", cfg.TSConfig)
 	}
+	fmt.Fprintf(os.Stderr, "  Method:      %s\n", cfg.Method)
 	fmt.Fprintf(os.Stderr, "  Watch:       %v\n", cfg.EnableWatch)
 	fmt.Fprintf(os.Stderr, "  Index now:   %v\n", cfg.IndexDeps)
 	fmt.Fprintf(os.Stderr, "  Conventions: %v\n", cfg.ScaffoldConventions)
@@ -501,10 +513,10 @@ func scaffoldConventions(root string, logger interface{ Info(string, ...any) }) 
 }
 
 // runInitIndex execs "scout index" to run the full index with --deps.
-func runInitIndex(root, dbPath, tsconfig, tsCommand, exclude string, logger interface{ Info(string, ...any); Error(string, ...any) }) error {
+func runInitIndex(root, dbPath, tsconfig, tsCommand, exclude, method string, logger interface{ Info(string, ...any); Error(string, ...any) }) error {
 	scoutBin := resolveBin("scout")
 
-	args := []string{"index", "--db", dbPath, "--root", root, "--deps"}
+	args := []string{"index", "--db", dbPath, "--root", root, "--deps", "--method", method}
 	if exclude != "" {
 		args = append(args, "--exclude", exclude)
 	}
