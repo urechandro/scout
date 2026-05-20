@@ -1,7 +1,7 @@
 # scout
 
-MCP server for fast, token-efficient navigation of a Go codebase. Gives Claude
-Code structured symbol lookup instead of broad file reads.
+MCP server for fast, token-efficient navigation of a Go and TypeScript codebase.
+Gives Claude Code structured symbol lookup instead of broad file reads.
 
 ## Install
 
@@ -9,27 +9,77 @@ Requires Go 1.21+. The target codebase must also have Go available (the indexer
 shells out to `go list` for type resolution).
 
 ```sh
-go install github.com/urechandro/scout/cmd/scout-index@latest
-go install github.com/urechandro/scout/cmd/scout-server@latest
+go install github.com/urechandro/scout/cmd/scout@latest
 ```
 
-## Usage
+## Quick start
+
+```sh
+cd /your/project
+scout init
+```
+
+`scout init` is an interactive TUI wizard (think `create-next-app`) that:
+- Creates `.scout/` and adds it to `.gitignore`
+- Generates `.mcp.json` wired to `scout serve`
+- Appends a `<!-- scout -->` navigation block to `CLAUDE.md`
+- Optionally scaffolds `conventions.yaml`
+- Runs a full index
+
+Then reload Claude Code to pick up the MCP server.
+
+Pass `--yes` / `-y` to skip the TUI and accept all defaults (CI-safe).
+
+## Commands
+
+```
+scout init       Bootstrap scout in a new project (interactive TUI)
+scout index      Build or update the symbol index
+scout reindex    Incrementally reindex specific files
+scout serve      Run the MCP server over stdio
+```
+
+Run `scout <command> --help` for flags.
+
+---
+
+## Manual setup
+
+If you prefer to wire things up by hand:
 
 ### 1. Index your codebase
 
 ```sh
-scout-index --db /your/project/.scout/index.db --root /your/project
+scout index --db /your/project/.scout/index.db --root /your/project
 ```
 
-Proto files (`.proto`) are indexed automatically alongside Go. Use `--exclude`
-to skip generated or vendored proto directories.
+With dependency signatures (recommended — makes imported types like `grpc.ClientConn` discoverable):
+
+```sh
+scout index --db /your/project/.scout/index.db --root /your/project --deps
+```
+
+For TypeScript projects:
+
+```sh
+scout index --db /your/project/.scout/index.db --root /your/project \
+  --tsconfig /your/project/tsconfig.json
+```
 
 For incremental reindex (e.g. from a pre-commit hook):
 
 ```sh
-scout-index --db /your/project/.scout/index.db --root /your/project \
+scout reindex --db /your/project/.scout/index.db \
   --files path/to/changed.go,other.go
 ```
+
+Call graph method (default `rta`):
+
+| Flag | Description |
+|---|---|
+| `--method rta` | Precise — recommended for most projects |
+| `--method cha` | Fast, conservative — good for large codebases |
+| `--method ast` | Fastest, no type info — CI / huge monorepos |
 
 ### 2. Wire up Claude Code
 
@@ -40,15 +90,21 @@ Add to `.mcp.json` in your project root:
   "mcpServers": {
     "scout": {
       "type": "stdio",
-      "command": "scout-server",
-      "args": ["--db", "/your/project/.scout/index.db"],
+      "command": "scout",
+      "args": ["serve", "--db", "/your/project/.scout/index.db",
+               "--watch", "/your/project"],
       "env": {}
     }
   }
 }
 ```
 
-If `scout-server` is not on your `$PATH`, use the full path (e.g. `~/go/bin/scout-server`).
+If `scout` is not on your `$PATH`, use the full path (e.g. `~/go/bin/scout`).
+
+The `--watch` flag enables live reindexing: Go files update in ~50ms (AST-only),
+then a full type-checked reindex runs after a 2s debounce.
+
+### 3. Add to CLAUDE.md
 
 Add the following to your project's `CLAUDE.md` so Claude Code uses scout
 tools instead of defaulting to grep/find/Read:
@@ -113,11 +169,11 @@ Do not explore out of anxiety. Extra rounds add tokens without changing the deli
   - Need blast radius? → `get_impact`
 - **NEVER use Read on .go or .proto files.** This is absolute. Use `get_body` with the symbol ID instead. `Read` is ONLY for non-code files (go.mod, yaml, config, markdown, Makefile).
 - **NEVER use Bash (grep/find/cat) on .go or .proto files.** Use scout tools instead.
-- **Do not chase into external dependencies.** If a symbol comes from an external package (e.g. `saga-toolbox`, `grpc`), its signature from `get_body` is enough. Do NOT grep/find/Read in the Go module cache (`~/go/pkg/mod/`). Describe external calls by their signature and move on.
+- **Do not chase into external dependencies.** If a symbol comes from an external package, its signature from `get_body` is enough. Do NOT grep/find/Read in the Go module cache (`~/go/pkg/mod/`).
 - Before changing a function signature, call get_callers to check blast radius.
 ```
 
-### 3. Inspect the index (optional)
+### 4. Inspect the index (optional)
 
 Uses [Datasette](https://datasette.io/) for a browsable UI at http://localhost:8001:
 
@@ -125,7 +181,7 @@ Uses [Datasette](https://datasette.io/) for a browsable UI at http://localhost:8
 datasette /your/project/.scout/index.db --host 0.0.0.0 --port 8001
 ```
 
-Or query directly with `sqlite3`:
+Or query directly:
 
 ```sh
 sqlite3 /your/project/.scout/index.db
@@ -134,19 +190,18 @@ SELECT id, kind, signature FROM symbols LIMIT 20;
 SELECT COUNT(*) FROM edges;
 ```
 
-### 4. Document conventions (optional)
+### 5. Document conventions (optional)
 
-`get_conventions` returns documented architectural patterns when a
-`conventions.yaml` exists at your project root. Copy the example file and fill
-it in:
+`scout init` can scaffold a `conventions.yaml` for you. Or copy the example manually:
 
 ```sh
 cp conventions.example.yaml /your/project/conventions.yaml
 ```
 
 Each entry documents one pattern — name, search terms, description, pseudocode
-structure, and example symbol IDs. The indexer loads it automatically on every
-run.
+structure, and example symbol IDs. The indexer loads it automatically on every run.
+
+---
 
 ## Tools exposed to Claude Code
 
@@ -160,4 +215,4 @@ run.
 | `get_callers(symbol_id)` | Everything that calls this symbol. Falls back to interface/RPC lookup and body-reference heuristics when call graph edges are missing. |
 | `get_callees(symbol_id)` | Everything this symbol depends on. Falls back to body-reference extraction. |
 | `get_unimplemented(service)` | Diff a proto service against Go server methods. Returns which RPCs are missing or stubbed. Call before adding a new RPC. |
-| `get_conventions(topic)` | Look up a documented architectural pattern by topic (e.g. "pagination", "auth", "outbox"). Returns the pattern description, pseudocode structure, and resolved example symbols. |
+| `get_conventions(topic)` | Look up a documented architectural pattern by topic. Returns the pattern description, pseudocode structure, and resolved example symbols. |
