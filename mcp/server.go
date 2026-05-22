@@ -532,6 +532,9 @@ func (s *Server) callGetBody(args json.RawMessage) (any, error) {
 	if err := json.Unmarshal(args, &params); err != nil {
 		return nil, fmt.Errorf("invalid arguments: %w", err)
 	}
+	if params.SymbolID == "" {
+		return nil, fmt.Errorf("symbol_id is required — pass an id from get_relevant_context results")
+	}
 
 	return s.engine.GetBody(params.SymbolID)
 }

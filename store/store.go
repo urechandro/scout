@@ -12,16 +12,16 @@ import (
 
 // Symbol represents a parsed Go symbol (function, type, method, etc).
 type Symbol struct {
-	ID        string // e.g. "github.com/myapp/auth.ValidateToken"
-	Package   string // e.g. "github.com/myapp/auth"
-	Name      string // e.g. "ValidateToken"
-	Kind      string // "func", "type", "method", "var", "const", "interface"
-	Signature string // e.g. "func ValidateToken(token string) (*Claims, error)"
-	Docstring string
-	File      string
-	LineStart int
-	LineEnd   int
-	Body      string
+	ID        string `json:"id"`        // e.g. "github.com/myapp/auth.ValidateToken"
+	Package   string `json:"package"`   // e.g. "github.com/myapp/auth"
+	Name      string `json:"name"`      // e.g. "ValidateToken"
+	Kind      string `json:"kind"`      // "func", "type", "method", "var", "const", "interface"
+	Signature string `json:"signature"` // e.g. "func ValidateToken(token string) (*Claims, error)"
+	Docstring string `json:"docstring,omitempty"`
+	File      string `json:"file"`
+	LineStart int    `json:"line_start"`
+	LineEnd   int    `json:"line_end,omitempty"`
+	Body      string `json:"body,omitempty"`
 }
 
 // Edge represents a directed relationship between two symbols.
@@ -361,6 +361,10 @@ func (s *Store) getRelated(symbolID, matchCol, returnCol, kind string) ([]Symbol
 //
 // Returns the best match and all candidates (for disambiguation hints).
 func (s *Store) FuzzyGetSymbol(query string) (*Symbol, []Symbol, error) {
+	if query == "" {
+		return nil, nil, ErrNotFound
+	}
+
 	// 1. Exact match.
 	sym, err := s.GetSymbol(query)
 	if err == nil {

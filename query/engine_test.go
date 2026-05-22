@@ -732,6 +732,21 @@ func TestGetBody_References(t *testing.T) {
 	}
 }
 
+func TestGetBody_EmptyID_ReturnsError(t *testing.T) {
+	s := newTestStore(t)
+	// Seed a short symbol so that a wildcard LIKE '%' would return it if the
+	// guard were absent — confirming the fix isn't a vacuous pass.
+	seedSymbols(t, s, []store.Symbol{
+		{ID: "proto.Check", Package: "proto", Name: "Check", Kind: "func", Signature: "func Check()", File: "check.go"},
+	})
+
+	engine := New(s)
+	_, err := engine.GetBody("")
+	if err == nil {
+		t.Fatal("GetBody(\"\") returned nil error, want an error")
+	}
+}
+
 func TestGetBody_NoReferences_EmptyBody(t *testing.T) {
 	s := newTestStore(t)
 	seedSymbols(t, s, []store.Symbol{

@@ -294,6 +294,21 @@ func TestFuzzyGetSymbol_NotFound(t *testing.T) {
 	}
 }
 
+func TestFuzzyGetSymbol_EmptyQuery_ReturnsNotFound(t *testing.T) {
+	s := newTestStore(t)
+	// Seed symbols so that a wildcard LIKE '%' would return results if the
+	// guard were absent — confirming the fix rather than a vacuous pass.
+	seedSymbols(t, s, []Symbol{
+		{ID: "a.Short", Package: "a", Name: "Short", Kind: "func", Signature: "func Short()", File: "a.go"},
+		{ID: "b.AlsoShort", Package: "b", Name: "AlsoShort", Kind: "func", Signature: "func AlsoShort()", File: "b.go"},
+	})
+
+	_, _, err := s.FuzzyGetSymbol("")
+	if err != ErrNotFound {
+		t.Errorf("FuzzyGetSymbol(\"\") = %v, want ErrNotFound", err)
+	}
+}
+
 // --- SearchFTS ---
 
 func TestSearchFTS_Basic(t *testing.T) {
