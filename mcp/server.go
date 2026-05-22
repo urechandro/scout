@@ -320,6 +320,34 @@ Returns results grouped by layer: proto, generated, implementation, tests. Each 
 			},
 		},
 		{
+			"name": "get_viz",
+			"description": `Generate a call graph visualization for a symbol. Returns Graphviz DOT format (pipe to ` + "`dot -Tsvg`" + ` to render) and an ASCII overview of direct callers/callees.
+
+Use this to understand how a symbol connects to the rest of the codebase visually, or to produce a diagram for a PR description.
+
+The DOT output can be rendered with:
+  echo '<dot>' | dot -Tsvg > graph.svg
+  echo '<dot>' | dot -Tpng > graph.png`,
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"symbol_id": map[string]any{
+						"type":        "string",
+						"description": "Fully-qualified symbol ID of the function/method to visualize.",
+					},
+					"direction": map[string]any{
+						"type":        "string",
+						"description": "Which edges to follow: \"callers\", \"callees\", or \"both\" (default).",
+					},
+					"depth": map[string]any{
+						"type":        "integer",
+						"description": "BFS depth — how many hops to walk. Default 2, max 4.",
+					},
+				},
+				"required": []string{"symbol_id"},
+			},
+		},
+		{
 			"name": "get_conventions",
 			"description": `Find how a cross-cutting pattern is used across the codebase. Searches broadly across ALL symbol kinds (functions, methods, types, interfaces) — not just RPCs.
 
@@ -462,6 +490,8 @@ func (s *Server) handleToolsCall(req request) *response {
 		result, err = s.callGetConventions(params.Arguments)
 	case "get_impact":
 		result, err = s.callGetImpact(params.Arguments)
+	case "get_viz":
+		result, err = s.callGetViz(params.Arguments)
 	default:
 		return s.errResponse(req.ID, -32601, fmt.Sprintf("unknown tool: %s", params.Name))
 	}
@@ -615,6 +645,21 @@ func (s *Server) callGetImpact(args json.RawMessage) (any, error) {
 		return nil, fmt.Errorf("symbol_id is required")
 	}
 	return s.engine.GetImpact(params.SymbolID)
+}
+
+func (s *Server) callGetViz(args json.RawMessage) (any, error) {
+	var params struct {
+		SymbolID  string `json:"symbol_id"`
+		Direction string `json:"direction"`
+		Depth     int    `json:"depth"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return nil, fmt.Errorf("invalid arguments: %w", err)
+	}
+	if params.SymbolID == "" {
+		return nil, fmt.Errorf("symbol_id is required")
+	}
+	return s.engine.GetViz(params.SymbolID, params.Direction, params.Depth)
 }
 
 func (s *Server) errResponse(id any, code int, msg string) *response {

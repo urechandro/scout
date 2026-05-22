@@ -1122,6 +1122,184 @@ func preferSvcMethod(methods []store.Symbol) *store.Symbol {
 	return nil
 }
 
+// vizEdge is a directed call graph edge used by GetViz.
+type vizEdge struct{ from, to string }
+
+// VizResponse is returned by GetViz.
+type VizResponse struct {
+	Symbol    SymbolSummary `json:"symbol"`
+	Direction string        `json:"direction"`
+	DOT       string        `json:"dot"`
+	ASCII     string        `json:"ascii"`
+	NodeCount int           `json:"node_count"`
+	EdgeCount int           `json:"edge_count"`
+}
+
+// GetViz builds a call graph visualization for a symbol by BFS-walking store
+// edges. Returns Graphviz DOT (pipe to `dot -Tsvg`) and an ASCII overview.
+// direction: "callers", "callees", or "both". depth: BFS hops (max 4).
+func (e *Engine) GetViz(symbolID string, direction string, depth int) (*VizResponse, error) {
+	resolvedID, err := e.resolveSymbolID(symbolID)
+	if err != nil {
+		return nil, fmt.Errorf("get viz for %s: %w", symbolID, err)
+	}
+	rootSym, _, err := e.store.FuzzyGetSymbol(resolvedID)
+	if err != nil {
+		return nil, fmt.Errorf("symbol not found: %s", resolvedID)
+	}
+	resolvedID = rootSym.ID
+
+	if direction == "" {
+		direction = "both"
+	}
+	if depth <= 0 {
+		depth = 2
+	}
+	if depth > 4 {
+		depth = 4
+	}
+
+	nodes := map[string]store.Symbol{resolvedID: *rootSym}
+	var edges []vizEdge
+	visited := map[string]bool{resolvedID: true}
+	queue := []string{resolvedID}
+
+	for d := 0; d < depth && len(queue) > 0; d++ {
+		var next []string
+		for _, id := range queue {
+			if direction == "callers" || direction == "both" {
+				callers, _ := e.store.GetCallers(id)
+				for _, c := range callers {
+					edges = append(edges, vizEdge{c.ID, id})
+					if !visited[c.ID] {
+						visited[c.ID] = true
+						nodes[c.ID] = c
+						next = append(next, c.ID)
+					}
+				}
+			}
+			if direction == "callees" || direction == "both" {
+				callees, _ := e.store.GetCallees(id)
+				for _, c := range callees {
+					edges = append(edges, vizEdge{id, c.ID})
+					if !visited[c.ID] {
+						visited[c.ID] = true
+						nodes[c.ID] = c
+						next = append(next, c.ID)
+					}
+				}
+			}
+		}
+		queue = next
+	}
+
+	dot := buildVizDOT(resolvedID, nodes, edges)
+	ascii := buildVizASCII(resolvedID, nodes, edges)
+
+	return &VizResponse{
+		Symbol:    toSummary(*rootSym, 0, ""),
+		Direction: direction,
+		DOT:       dot,
+		ASCII:     ascii,
+		NodeCount: len(nodes),
+		EdgeCount: len(edges),
+	}, nil
+}
+
+func buildVizDOT(rootID string, nodes map[string]store.Symbol, edges []vizEdge) string {
+	// Assign stable integer IDs.
+	ids := make(map[string]int, len(nodes))
+	sorted := make([]string, 0, len(nodes))
+	for id := range nodes {
+		sorted = append(sorted, id)
+	}
+	sort.Strings(sorted)
+	for i, id := range sorted {
+		ids[id] = i
+	}
+
+	var sb strings.Builder
+	sb.WriteString("digraph callgraph {\n")
+	sb.WriteString("\trankdir=LR;\n")
+	sb.WriteString("\tnode [shape=box fontname=\"Courier\" fontsize=10];\n")
+	for _, id := range sorted {
+		sym := nodes[id]
+		label := vizLabel(sym)
+		style := ""
+		if id == rootID {
+			style = ` style=filled fillcolor="#d0e8ff"`
+		}
+		fmt.Fprintf(&sb, "\t%d [label=%q%s];\n", ids[id], label, style)
+	}
+	seen := map[string]bool{}
+	for _, e := range edges {
+		key := e.from + "\x00" + e.to
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		fmt.Fprintf(&sb, "\t%d -> %d;\n", ids[e.from], ids[e.to])
+	}
+	sb.WriteString("}\n")
+	return sb.String()
+}
+
+func buildVizASCII(rootID string, nodes map[string]store.Symbol, edges []vizEdge) string {
+	// Collect direct callers and callees of root.
+	callerSet := map[string]bool{}
+	calleeSet := map[string]bool{}
+	for _, e := range edges {
+		if e.to == rootID {
+			callerSet[e.from] = true
+		}
+		if e.from == rootID {
+			calleeSet[e.to] = true
+		}
+	}
+
+	root := nodes[rootID]
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "%s\n", vizLabel(root))
+
+	writeGroup := func(label string, ids map[string]bool) {
+		if len(ids) == 0 {
+			return
+		}
+		sorted := make([]string, 0, len(ids))
+		for id := range ids {
+			sorted = append(sorted, id)
+		}
+		sort.Strings(sorted)
+		fmt.Fprintf(&sb, "\n%s (%d):\n", label, len(sorted))
+		for i, id := range sorted {
+			connector := "├── "
+			if i == len(sorted)-1 {
+				connector = "└── "
+			}
+			sym := nodes[id]
+			fmt.Fprintf(&sb, "%s%s  %s:%d\n", connector, vizLabel(sym), sym.File, sym.LineStart)
+		}
+	}
+
+	writeGroup("Called by", callerSet)
+	writeGroup("Calls", calleeSet)
+
+	if len(nodes) > 1+len(callerSet)+len(calleeSet) {
+		fmt.Fprintf(&sb, "\n(%d additional nodes in DOT output)\n", len(nodes)-1-len(callerSet)-len(calleeSet))
+	}
+	return sb.String()
+}
+
+func vizLabel(sym store.Symbol) string {
+	// Use the last two dot-separated components after the last slash.
+	// e.g. "github.com/myapp/svc.Server.CreateShipment" → "svc.Server.CreateShipment"
+	id := sym.ID
+	if slash := strings.LastIndex(id, "/"); slash >= 0 {
+		id = id[slash+1:]
+	}
+	return id
+}
+
 // FlowResponse is returned by GetFlow.
 type FlowResponse struct {
 	Callers []SymbolWithBody `json:"callers,omitempty"`

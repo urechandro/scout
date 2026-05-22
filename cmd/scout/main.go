@@ -18,6 +18,7 @@ Commands:
   index    Build or update the symbol index
   reindex  Incrementally reindex specific files
   serve    Run the MCP server over stdio
+  viz      Output a call graph subgraph as Graphviz DOT
 
 Run 'scout <command> --help' for command-specific flags.
 `
@@ -40,6 +41,8 @@ func main() {
 		cmdReindex(args)
 	case "serve":
 		cmdServe(args)
+	case "viz":
+		cmdViz(args)
 	case "help", "--help", "-h":
 		fmt.Fprint(os.Stderr, usage)
 	default:
