@@ -19,7 +19,7 @@ cd /your/project
 scout init
 ```
 
-`scout init` is an interactive TUI wizard (think `create-next-app`) that:
+`scout init` is an interactive TUI wizard that:
 - Creates `.scout/` and adds it to `.gitignore`
 - Generates `.mcp.json` wired to `scout serve`
 - Appends a `<!-- scout -->` navigation block to `CLAUDE.md`
@@ -100,6 +100,24 @@ Add to `.mcp.json` in your project root:
 ```
 
 If `scout` is not on your `$PATH`, use the full path (e.g. `~/go/bin/scout`).
+
+For TypeScript projects, add `--tsconfig` and optionally `--ts-command`:
+
+```json
+{
+  "mcpServers": {
+    "scout": {
+      "type": "stdio",
+      "command": "scout",
+      "args": ["serve", "--db", "/your/project/.scout/index.db",
+               "--watch", "/your/project",
+               "--tsconfig", "/your/project/tsconfig.json",
+               "--ts-command", "node /path/to/ts-callgraph/dist/cli.js"],
+      "env": {}
+    }
+  }
+}
+```
 
 The `--watch` flag enables live reindexing: Go files update in ~50ms (AST-only),
 then a full type-checked reindex runs after a 2s debounce.
