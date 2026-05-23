@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -10,6 +11,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/charmbracelet/huh"
 )
@@ -530,6 +533,74 @@ func runInitIndex(root, dbPath, tsconfig, tsCommand, exclude, method string, log
 	logger.Info("running full index", "root", root)
 	cmd := exec.Command(scoutBin, args...)
 	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+
+	if !stderrIsTTY() {
+		cmd.Stderr = os.Stderr
+		return cmd.Run()
+	}
+	return runWithSpinner(cmd)
+}
+
+func stderrIsTTY() bool {
+	fi, err := os.Stderr.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
+}
+
+func runWithSpinner(cmd *exec.Cmd) error {
+	pipe, err := cmd.StderrPipe()
+	if err != nil {
+		cmd.Stderr = os.Stderr
+		return cmd.Run()
+	}
+
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	var mu sync.Mutex
+	var lastLine string
+
+	go func() {
+		scanner := bufio.NewScanner(pipe)
+		for scanner.Scan() {
+			mu.Lock()
+			lastLine = scanner.Text()
+			mu.Unlock()
+		}
+	}()
+
+	frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	ticker := time.NewTicker(80 * time.Millisecond)
+	stop := make(chan struct{})
+
+	go func() {
+		defer ticker.Stop()
+		for i := 0; ; i++ {
+			select {
+			case <-ticker.C:
+				mu.Lock()
+				line := lastLine
+				mu.Unlock()
+				if len(line) > 70 {
+					line = line[:67] + "..."
+				}
+				fmt.Fprintf(os.Stderr, "\r%s indexing…  %s\033[K", frames[i%len(frames)], line)
+			case <-stop:
+				return
+			}
+		}
+	}()
+
+	err = cmd.Wait()
+	close(stop)
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "\r✗ indexing failed\033[K\n")
+	} else {
+		fmt.Fprintf(os.Stderr, "\r✓ indexing complete\033[K\n")
+	}
+	return err
 }
