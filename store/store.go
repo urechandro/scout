@@ -233,6 +233,32 @@ func (s *Store) DeleteEdgesByKind(kind string) error {
 	return nil
 }
 
+// DeleteEdgesByKindAndPackages removes only edges of a given kind whose from_id
+// starts with one of the given package paths. Used when reindexing a single
+// module in a multi-module repo so that other modules' edges are preserved.
+func (s *Store) DeleteEdgesByKindAndPackages(kind string, pkgPaths []string) error {
+	if len(pkgPaths) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	stmt, err := tx.Prepare(`DELETE FROM edges WHERE kind = ? AND from_id LIKE ?`)
+	if err != nil {
+		tx.Rollback() //nolint:errcheck
+		return fmt.Errorf("prepare: %w", err)
+	}
+	defer stmt.Close()
+	for _, pkg := range pkgPaths {
+		if _, err := stmt.Exec(kind, pkg+"%"); err != nil {
+			tx.Rollback() //nolint:errcheck
+			return fmt.Errorf("delete edges for package %s: %w", pkg, err)
+		}
+	}
+	return tx.Commit()
+}
+
 // DeleteByFile removes all symbols (and their edges) from a given file.
 // Used during incremental reindexing when a file changes.
 func (s *Store) DeleteByFile(file string) error {
