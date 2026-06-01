@@ -55,6 +55,11 @@ func New(path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite at %s: %w", path, err)
 	}
+	// A single connection serializes all DB access across goroutines and
+	// eliminates SQLite "database is locked" errors from concurrent writers.
+	// The watcher's light-reindex goroutine and full-reindex timer goroutine
+	// both write to the DB; without this they contend on the connection pool.
+	db.SetMaxOpenConns(1)
 
 	s := &Store{db: db}
 	if err := s.migrate(); err != nil {
@@ -70,6 +75,11 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) migrate() error {
+	// WAL mode persists in the DB file, so other tools (datasette, sqlite3 CLI)
+	// can read concurrently while the MCP server writes.
+	if _, err := s.db.Exec(`PRAGMA journal_mode = WAL`); err != nil {
+		return fmt.Errorf("set WAL mode: %w", err)
+	}
 	_, err := s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS symbols (
 			id         TEXT PRIMARY KEY,
@@ -230,18 +240,28 @@ func (s *Store) DeleteByFile(file string) error {
 	if err != nil {
 		return fmt.Errorf("query symbols for file %s: %w", file, err)
 	}
-	defer rows.Close()
 
 	var ids []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
+			rows.Close()
 			return fmt.Errorf("scan symbol id: %w", err)
 		}
 		ids = append(ids, id)
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("iterate symbols for file %s: %w", file, err)
+	}
+	// Close before writing — an open SELECT cursor holds a shared lock that
+	// blocks write locks on other connections in non-WAL mode.
+	rows.Close()
 
 	for _, id := range ids {
+		if _, err := s.db.Exec(`DELETE FROM symbols_fts WHERE id = ?`, id); err != nil {
+			return fmt.Errorf("delete fts for %s: %w", id, err)
+		}
 		if _, err := s.db.Exec(`DELETE FROM edges WHERE from_id = ? OR to_id = ?`, id, id); err != nil {
 			return fmt.Errorf("delete edges for %s: %w", id, err)
 		}
