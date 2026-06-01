@@ -596,17 +596,20 @@ func (idx *Indexer) buildCallGraph(pkgs []*packages.Package, method CallGraphMet
 		return fmt.Errorf("build call graph: %w", err)
 	}
 
-	// Clear old call edges before writing new ones.
-	if err := idx.store.DeleteEdgesByKind("calls"); err != nil {
-		return fmt.Errorf("clear old call edges: %w", err)
-	}
-
 	// Only write edges originating from indexed (non-excluded) packages.
 	indexedPkgs := make(map[string]bool, len(pkgs))
+	var indexedPkgPaths []string
 	for _, pkg := range pkgs {
 		if !idx.isExcluded(pkg) {
 			indexedPkgs[pkg.PkgPath] = true
+			indexedPkgPaths = append(indexedPkgPaths, pkg.PkgPath)
 		}
+	}
+
+	// Clear stale call edges for this module's packages only, preserving edges
+	// from other modules in multi-module repos indexed with --root.
+	if err := idx.store.DeleteEdgesByKindAndPackages("calls", indexedPkgPaths); err != nil {
+		return fmt.Errorf("clear old call edges: %w", err)
 	}
 
 	var written int
