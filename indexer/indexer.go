@@ -118,14 +118,9 @@ func (idx *Indexer) Run() error {
 
 // RunFiles re-indexes only the specified files (for incremental updates).
 func (idx *Indexer) RunFiles(files []string) error {
-	// Delete existing symbols for these files first.
-	for _, file := range files {
-		if err := idx.store.DeleteByFile(file); err != nil {
-			return fmt.Errorf("delete stale symbols for %s: %w", file, err)
-		}
-	}
-
-	// Reload affected packages.
+	// Reload affected packages first so we only delete stale symbols when we
+	// know the package loaded successfully. Deleting before load means a compile
+	// error would permanently erase symbols until the next successful save.
 	pkgs, err := idx.load()
 	if err != nil {
 		return fmt.Errorf("load packages for incremental update: %w", err)
@@ -147,6 +142,23 @@ func (idx *Indexer) RunFiles(files []string) error {
 		}
 		if !affected {
 			continue
+		}
+
+		// Skip packages that failed to type-check — TypesInfo is nil when the
+		// package has errors. Don't delete existing symbols in this case so that
+		// the index stays usable until the compile error is fixed.
+		if pkg.TypesInfo == nil {
+			log.Printf("watcher: skipping package %s (type-check failed, keeping stale symbols)", pkg.PkgPath)
+			continue
+		}
+
+		// Delete stale symbols for the changed files in this package.
+		for _, f := range pkg.GoFiles {
+			if fileSet[f] {
+				if err := idx.store.DeleteByFile(f); err != nil {
+					return fmt.Errorf("delete stale symbols for %s: %w", f, err)
+				}
+			}
 		}
 
 		if err := idx.indexPackage(pkg); err != nil {
