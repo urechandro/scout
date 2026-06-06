@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -70,6 +71,18 @@ func TestGoldenFixtures(t *testing.T) {
 	for _, f := range fixtures {
 		t.Run(f.Name, func(t *testing.T) {
 			result, err := RunFixture(eng, f)
+
+			if f.WantError != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got success", f.WantError)
+				}
+				if !strings.Contains(err.Error(), f.WantError) {
+					t.Errorf("error %q does not contain %q", err.Error(), f.WantError)
+				}
+				t.Logf("tool=%s err=%q", f.Tool, err.Error())
+				return
+			}
+
 			if err != nil {
 				t.Fatalf("%s: %v", f.Tool, err)
 			}
