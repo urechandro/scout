@@ -82,3 +82,15 @@
     - github.com/urechandro/scout/protoindexer
     - github.com/urechandro/scout/indexer
   max_bytes: 8000
+
+# Scout's own corpus has no proto RPCs, so this exercises get_pattern's
+# FTS-fallback path: when no RPC matches, it returns an Implementation
+# slice built from the best Go-symbol hit.
+- name: pattern_fallback_returns_implementation
+  tool: get_pattern
+  args:
+    task: upsert symbol
+  must_include:
+    - "\"implementation\""
+    - UpsertSymbol
+  max_bytes: 5000
