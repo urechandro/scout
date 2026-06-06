@@ -125,6 +125,8 @@ func (w *Watcher) handleEvent(event fsnotify.Event, watcher *fsnotify.Watcher) {
 		w.handleProtoChange(path)
 	case isTSSource(path):
 		w.handleTSChange(path)
+	case isConventionsFile(path):
+		w.handleConventionsChange(path)
 	}
 }
 
@@ -155,6 +157,15 @@ func (w *Watcher) handleProtoChange(path string) {
 	}
 	log.Printf("watcher: proto reindex %s (%v)", filepath.Base(path), time.Since(start))
 	w.relinkProto("proto")
+}
+
+func (w *Watcher) handleConventionsChange(path string) {
+	start := time.Now()
+	if err := IndexConventions(filepath.Dir(path), w.store); err != nil {
+		log.Printf("watcher: conventions reindex %s failed: %v", path, err)
+		return
+	}
+	log.Printf("watcher: conventions reindex %s (%v)", filepath.Base(path), time.Since(start))
 }
 
 // relinkProto re-runs proto↔Go implements-edge linking. RPC and Go method
@@ -263,4 +274,9 @@ func isTSSource(path string) bool {
 		return false
 	}
 	return strings.HasSuffix(path, ".ts") || strings.HasSuffix(path, ".tsx")
+}
+
+func isConventionsFile(path string) bool {
+	base := filepath.Base(path)
+	return base == "conventions.yaml" || base == "conventions.yml"
 }
