@@ -282,6 +282,27 @@ The task should describe the kind of operation: "create shipment", "update trans
 			},
 		},
 		{
+			"name": "get_simplest_rpc",
+			"description": `Find the RPCs with the fewest direct dependencies in their Go implementation — the cleanest existing examples to copy when adding something new.
+
+Ranks RPCs ascending by the number of symbols their implementation calls directly. Stubs (zero callees) are excluded. Returns full vertical slices (proto → request/response messages → Go impl, with bodies) so the result is drop-in usable as a template.
+
+Use this when you want the smallest end-to-end working RPC in a service to use as a starting point, instead of guessing which existing RPC is simplest.`,
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"service": map[string]any{
+						"type":        "string",
+						"description": "Optional proto service name (substring match against RPC IDs). Empty matches all services. Examples: 'ShipmentService', 'TransportOrder'.",
+					},
+					"limit": map[string]any{
+						"type":        "integer",
+						"description": "Maximum results to return. Default 3, capped at 10.",
+					},
+				},
+			},
+		},
+		{
 			"name": "get_unimplemented",
 			"description": `Find which RPCs in a proto service are missing or stubbed in the Go server implementation.
 
@@ -455,6 +476,7 @@ more token-efficient than reading files directly.
 | get_callees(symbol_id) | To understand what a symbol depends on |
 | get_flow(symbol_id) | To understand a symbol in context (body + callers + callees) |
 | get_pattern(task) | To get a full example slice (proto → messages → Go impl) |
+| get_simplest_rpc(service) | To find the cleanest existing RPC to use as a template |
 | get_unimplemented(service) | Before adding a new RPC — shows what's missing or stubbed |
 `
 
@@ -484,6 +506,8 @@ func (s *Server) handleToolsCall(req request) *response {
 		result, err = s.callGetFlow(params.Arguments)
 	case "get_pattern":
 		result, err = s.callGetPattern(params.Arguments)
+	case "get_simplest_rpc":
+		result, err = s.callGetSimplestRPC(params.Arguments)
 	case "get_unimplemented":
 		result, err = s.callGetUnimplemented(params.Arguments)
 	case "get_conventions":
@@ -609,6 +633,20 @@ func (s *Server) callGetPattern(args json.RawMessage) (any, error) {
 		return nil, fmt.Errorf("invalid arguments: %w", err)
 	}
 	return s.engine.GetPattern(params.Task)
+}
+
+func (s *Server) callGetSimplestRPC(args json.RawMessage) (any, error) {
+	var params struct {
+		Service string `json:"service"`
+		Limit   int    `json:"limit"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return nil, fmt.Errorf("invalid arguments: %w", err)
+	}
+	if params.Limit > 10 {
+		params.Limit = 10
+	}
+	return s.engine.GetSimplestRPC(params.Service, params.Limit)
 }
 
 func (s *Server) callGetUnimplemented(args json.RawMessage) (any, error) {
