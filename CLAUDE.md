@@ -56,6 +56,7 @@ your codebase (.go + .proto + .ts/.tsx files)
 | `get_impact(symbol_id)` | Full blast radius across layers. Traces proto↔Go name linkage, generated code, callers, implementors, and tests. Use before renaming or changing a type/field. |
 | `get_callers(symbol_id)` | Everything that calls this symbol. Falls back to interface/RPC lookup and body-reference heuristics when call graph edges are missing. |
 | `get_callees(symbol_id)` | Everything this symbol depends on. Falls back to body-reference extraction. |
+| `get_simplest_rpc(service, limit)` | Find the RPCs with the fewest direct callees in their Go implementation, ranked ascending. Returns full vertical slices (proto → messages → Go impl with bodies). Use to pick the cleanest existing example to copy when adding a new RPC. Stubs (zero callees) excluded. `service` is an optional substring filter. |
 | `get_unimplemented(service)` | Diff a proto service against Go server methods. Returns which RPCs are missing or stubbed (`codes.Unimplemented`). Call before adding a new RPC. |
 | `get_conventions(topic)` | Look up a documented architectural pattern by topic (e.g. "pagination", "auth", "event handler"). Returns the pattern description, pseudocode structure, and resolved example symbols. Falls back to FTS if no convention matches. |
 
@@ -329,11 +330,6 @@ Key findings:
   new, call `get_pattern` on the closest existing RPC, not the non-existent one.
 
 ## Known Issues / Next Steps
-
-### High value
-- **"Find simplest example" queries** — "which RPC has the fewest dependencies?"
-  isn't expressible in the current tool set. The model has to call get_pattern
-  on several RPCs and compare manually.
 
 ### Housekeeping
 - Pre-commit hook not tested end-to-end.

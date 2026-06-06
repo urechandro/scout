@@ -835,6 +835,107 @@ func (e *Engine) GetPattern(task string) (*PatternSlice, error) {
 	}, nil
 }
 
+// SimplestRPCResult is one entry in a SimplestResponse.
+type SimplestRPCResult struct {
+	PatternSlice
+	CalleeCount int `json:"callee_count"`
+}
+
+// SimplestResponse is returned by GetSimplestRPC.
+type SimplestResponse struct {
+	Service     string              `json:"service,omitempty"`
+	Considered  int                 `json:"considered"`
+	Results     []SimplestRPCResult `json:"results"`
+	Hint        string              `json:"hint,omitempty"`
+}
+
+// GetSimplestRPC returns the RPCs with the fewest direct callees in their Go
+// implementation, ranked ascending. Use this to find the cleanest existing
+// example to copy when implementing something new.
+//
+// service is an optional filter: a substring matched against the proto service
+// segment of each RPC ID (e.g. "ShipmentService"). Empty matches all RPCs.
+// RPCs without a Go implementation, or whose implementation has zero callees
+// (likely codes.Unimplemented stubs), are excluded.
+func (e *Engine) GetSimplestRPC(service string, limit int) (*SimplestResponse, error) {
+	if limit <= 0 {
+		limit = 3
+	}
+
+	rpcs, err := e.store.GetByKind("rpc")
+	if err != nil {
+		return nil, fmt.Errorf("get rpcs: %w", err)
+	}
+
+	resp := &SimplestResponse{Service: service}
+
+	type scored struct {
+		rpc         store.Symbol
+		impl        store.Symbol
+		calleeCount int
+	}
+
+	serviceLower := strings.ToLower(service)
+	var candidates []scored
+	for _, rpc := range rpcs {
+		if serviceLower != "" && !strings.Contains(strings.ToLower(rpc.ID), serviceLower) {
+			continue
+		}
+		methods, err := e.store.GetByNameAndKind(rpc.Name, "method")
+		if err != nil || len(methods) == 0 {
+			continue
+		}
+		impl := preferSvcMethod(methods)
+		if impl == nil {
+			continue
+		}
+		callees, err := e.store.GetCallees(impl.ID)
+		if err != nil {
+			continue
+		}
+		if len(callees) == 0 {
+			continue
+		}
+		candidates = append(candidates, scored{rpc: rpc, impl: *impl, calleeCount: len(callees)})
+	}
+
+	resp.Considered = len(candidates)
+
+	if len(candidates) == 0 {
+		if serviceLower != "" {
+			resp.Hint = fmt.Sprintf("No implemented RPCs matched %q. Try get_unimplemented to see stubs, or get_relevant_context for broader search.", service)
+		} else {
+			resp.Hint = "No implemented RPCs found. Index may be empty or all RPCs are stubs."
+		}
+		return resp, nil
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].calleeCount < candidates[j].calleeCount
+	})
+
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+
+	for _, c := range candidates {
+		slice, err := e.buildSlice(c.rpc, true)
+		if err != nil {
+			return nil, fmt.Errorf("build slice for %s: %w", c.rpc.ID, err)
+		}
+		resp.Results = append(resp.Results, SimplestRPCResult{
+			PatternSlice: *slice,
+			CalleeCount:  c.calleeCount,
+		})
+	}
+
+	if resp.Considered > len(resp.Results) {
+		resp.Hint = fmt.Sprintf("Showing %d of %d implemented RPCs ranked by direct callee count.", len(resp.Results), resp.Considered)
+	}
+
+	return resp, nil
+}
+
 // ConventionResult is returned by GetConventions.
 type ConventionResult struct {
 	// Name is the convention slug (from conventions.yaml) or the search topic.
