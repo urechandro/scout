@@ -758,13 +758,16 @@ func isUpperByte(b byte) bool {
 	return b >= 'A' && b <= 'Z'
 }
 
+// isGoKeyword reports whether s is the PascalCase form of a Go reserved word.
+// Used to filter accidental matches from extractTypeIdents (which only takes
+// capitalized identifiers). Real type names like Context, Server, String, and
+// Error are NOT filtered — they're legitimate references in get_body output.
 func isGoKeyword(s string) bool {
 	switch s {
 	case "Break", "Case", "Chan", "Const", "Continue", "Default", "Defer",
 		"Else", "Fallthrough", "For", "Func", "Go", "Goto", "If",
 		"Import", "Interface", "Map", "Package", "Range", "Return",
-		"Select", "Struct", "Switch", "Type", "Var",
-		"Context", "Server", "String", "Error":
+		"Select", "Struct", "Switch", "Type", "Var":
 		return true
 	}
 	return false
