@@ -14,6 +14,10 @@ import (
 
 // Fixture is one golden test case: call one tool with args and assert
 // substring presence + byte budget on the JSON-marshaled response.
+//
+// If WantError is set, the fixture instead expects the tool call to return an
+// error whose message contains the substring. Response-shape assertions are
+// skipped in that case.
 type Fixture struct {
 	Name           string         `yaml:"name"`
 	Tool           string         `yaml:"tool"`
@@ -21,6 +25,7 @@ type Fixture struct {
 	MustInclude    []string       `yaml:"must_include,omitempty"`
 	MustNotInclude []string       `yaml:"must_not_include,omitempty"`
 	MaxBytes       int            `yaml:"max_bytes,omitempty"`
+	WantError      string         `yaml:"want_error,omitempty"`
 }
 
 // LoadFixtures parses a YAML fixture file.

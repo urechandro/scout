@@ -94,3 +94,12 @@
     - "\"implementation\""
     - UpsertSymbol
   max_bytes: 5000
+
+# Scout's own corpus has no proto services, so get_unimplemented must
+# return a clear "no service found" error rather than crash or return
+# empty silently. This pins that contract.
+- name: unimplemented_errors_when_no_service_matches
+  tool: get_unimplemented
+  args:
+    service: ZzzNonExistentService
+  want_error: no service found
