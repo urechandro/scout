@@ -73,3 +73,12 @@
   args:
     query: parse proto messages and rpcs
   max_bytes: 12000
+
+- name: impact_of_upsert_symbol_crosses_packages
+  tool: get_impact
+  args:
+    symbol_id: github.com/urechandro/scout/store.Store.UpsertSymbol
+  must_include:
+    - github.com/urechandro/scout/protoindexer
+    - github.com/urechandro/scout/indexer
+  max_bytes: 8000
