@@ -166,16 +166,23 @@ func cmdReindex(args []string) {
 	changed := strings.Split(*files, ",")
 	logger.Info("incremental reindex", "files", len(changed))
 
-	// Detect which dirs contain the changed files and reindex them.
-	dirs := uniqueDirs(changed)
-	for _, d := range dirs {
+	// Partition Go files by their nearest go.mod so each module loads exactly
+	// once with only its own changed files.
+	var goFiles []string
+	for _, f := range changed {
+		if strings.HasSuffix(f, ".go") {
+			goFiles = append(goFiles, f)
+		}
+	}
+	byModule := partitionByModule(goFiles)
+	for moduleDir, files := range byModule {
 		cfg := indexer.Config{
-			Dir:      d,
+			Dir:      moduleDir,
 			Patterns: []string{"./..."},
 		}
 		idx := indexer.New(cfg, s)
-		if err := idx.RunFiles(changed); err != nil {
-			logger.Error("reindex failed", "dir", d, "err", err)
+		if err := idx.RunFiles(files); err != nil {
+			logger.Error("reindex failed", "dir", moduleDir, "err", err)
 			os.Exit(1)
 		}
 	}
@@ -239,16 +246,37 @@ func findModuleDirs(root string) ([]string, error) {
 	return dirs, err
 }
 
-// uniqueDirs returns the unique parent directories of a list of files.
-func uniqueDirs(files []string) []string {
-	seen := map[string]bool{}
-	var dirs []string
+// partitionByModule groups files by the directory of their nearest go.mod
+// ancestor. Files with no go.mod above them are grouped under their parent
+// directory as a fallback.
+func partitionByModule(files []string) map[string][]string {
+	out := map[string][]string{}
+	cache := map[string]string{}
 	for _, f := range files {
-		d := filepath.Dir(f)
-		if !seen[d] {
-			seen[d] = true
-			dirs = append(dirs, d)
+		dir := filepath.Dir(f)
+		modDir, ok := cache[dir]
+		if !ok {
+			modDir = findModuleRoot(dir)
+			if modDir == "" {
+				modDir = dir
+			}
+			cache[dir] = modDir
 		}
+		out[modDir] = append(out[modDir], f)
 	}
-	return dirs
+	return out
+}
+
+// findModuleRoot walks up from dir looking for a go.mod. Returns "" if none found.
+func findModuleRoot(dir string) string {
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
 }
