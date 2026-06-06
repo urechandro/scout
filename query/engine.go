@@ -1332,7 +1332,7 @@ func (e *Engine) GetFlow(symbolID string) (*FlowResponse, error) {
 	}
 
 	// Callers and callees are summaries only — use get_body if you need the source.
-	callers, err := e.store.GetCallers(symbolID)
+	callers, err := e.store.GetCallers(resolvedID)
 	if err != nil {
 		return nil, fmt.Errorf("get callers: %w", err)
 	}
@@ -1342,7 +1342,7 @@ func (e *Engine) GetFlow(symbolID string) (*FlowResponse, error) {
 		})
 	}
 
-	callees, err := e.store.GetCallees(symbolID)
+	callees, err := e.store.GetCallees(resolvedID)
 	if err != nil {
 		return nil, fmt.Errorf("get callees: %w", err)
 	}
