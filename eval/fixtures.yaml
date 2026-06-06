@@ -1,0 +1,75 @@
+# Golden fixtures for scout's retrieval tools.
+#
+# Each fixture calls one tool, marshals the result to JSON, and asserts:
+#   - must_include substrings appear in the JSON
+#   - must_not_include substrings do not
+#   - response size is within max_bytes (when set)
+#
+# The test indexes scout's own source as the corpus. Symbol IDs below are
+# qualified with github.com/urechandro/scout/... to match what the indexer
+# produces.
+
+- name: precise_lookup_finds_link_proto_to_go
+  tool: get_relevant_context
+  args:
+    query: LinkProtoToGo
+  must_include:
+    - github.com/urechandro/scout/indexer.LinkProtoToGo
+  max_bytes: 4000
+
+- name: discovery_finds_watcher
+  tool: get_relevant_context
+  args:
+    query: watcher debounce file changes
+  must_include:
+    - github.com/urechandro/scout/indexer.Watcher
+  max_bytes: 12000
+
+- name: empty_result_stays_small
+  tool: get_relevant_context
+  args:
+    query: ZzzNonExistentSymbolXyz999
+  must_not_include:
+    - "\"id\":"
+  max_bytes: 1500
+
+- name: get_flow_accepts_fuzzy_id
+  tool: get_flow
+  args:
+    symbol_id: LinkProtoToGo
+  must_include:
+    - github.com/urechandro/scout/indexer.LinkProtoToGo
+    - "\"callees\""
+  max_bytes: 16000
+
+- name: callers_of_link_proto_to_go
+  tool: get_callers
+  args:
+    symbol_id: github.com/urechandro/scout/indexer.LinkProtoToGo
+  must_include:
+    - github.com/urechandro/scout/cmd/scout
+  max_bytes: 4000
+
+- name: callees_of_link_proto_to_go
+  tool: get_callees
+  args:
+    symbol_id: github.com/urechandro/scout/indexer.LinkProtoToGo
+  must_include:
+    - UpsertEdge
+  max_bytes: 4000
+
+- name: simplest_rpc_on_no_rpc_corpus
+  tool: get_simplest_rpc
+  args:
+    service: ""
+    limit: 3
+  must_include:
+    - "\"considered\":0"
+    - No implemented RPCs
+  max_bytes: 1000
+
+- name: discovery_within_budget
+  tool: get_relevant_context
+  args:
+    query: parse proto messages and rpcs
+  max_bytes: 12000
