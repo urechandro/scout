@@ -154,6 +154,19 @@ func (w *Watcher) handleProtoChange(path string) {
 		return
 	}
 	log.Printf("watcher: proto reindex %s (%v)", filepath.Base(path), time.Since(start))
+	w.relinkProto("proto")
+}
+
+// relinkProto re-runs proto↔Go implements-edge linking. RPC and Go method
+// renames both invalidate these edges, so the watcher calls this after either
+// a proto reindex or a full Go reindex.
+func (w *Watcher) relinkProto(trigger string) {
+	linked, err := LinkProtoToGo(w.store)
+	if err != nil {
+		log.Printf("watcher: proto-go relink after %s failed: %v", trigger, err)
+		return
+	}
+	log.Printf("watcher: proto-go relink after %s (linked %d)", trigger, linked)
 }
 
 func (w *Watcher) runFullReindex() {
@@ -175,6 +188,7 @@ func (w *Watcher) runFullReindex() {
 		return
 	}
 	log.Printf("watcher: full reindex %d files (%v)", len(files), time.Since(start))
+	w.relinkProto("go")
 }
 
 func (w *Watcher) addDirs(watcher *fsnotify.Watcher) error {
