@@ -98,8 +98,11 @@ func cmdIndex(args []string) {
 		os.Exit(1)
 	}
 
-	if err := linkProtoToGo(s, logger); err != nil {
+	linked, err := indexer.LinkProtoToGo(s)
+	if err != nil {
 		logger.Warn("proto-go linking failed", "err", err)
+	} else {
+		logger.Info("proto-go linking complete", "linked", linked)
 	}
 
 	conventionsDir := *root
@@ -216,45 +219,6 @@ func cmdReindex(args []string) {
 	}
 
 	logger.Info("reindex complete", "files", len(changed))
-}
-
-// linkProtoToGo creates "implements" edges from Go methods to their proto RPCs.
-func linkProtoToGo(s *store.Store, logger interface {
-	Info(string, ...any)
-	Warn(string, ...any)
-}) error {
-	rpcs, err := s.GetByKind("rpc")
-	if err != nil {
-		return fmt.Errorf("get rpcs: %w", err)
-	}
-
-	var linked int
-	for _, rpc := range rpcs {
-		methods, err := s.GetByNameAndKind(rpc.Name, "method")
-		if err != nil || len(methods) == 0 {
-			continue
-		}
-		impl := methods[0]
-		for _, m := range methods {
-			if strings.Contains(m.Package, "svc") {
-				impl = m
-				break
-			}
-		}
-		edge := store.Edge{
-			FromID: impl.ID,
-			ToID:   rpc.ID,
-			Kind:   "implements",
-		}
-		if err := s.UpsertEdge(edge); err != nil {
-			logger.Warn("link proto-go edge", "from", impl.ID, "to", rpc.ID, "err", err)
-			continue
-		}
-		linked++
-	}
-
-	logger.Info("proto-go linking complete", "rpcs", len(rpcs), "linked", linked)
-	return nil
 }
 
 // findModuleDirs walks root and returns every directory containing a go.mod.
