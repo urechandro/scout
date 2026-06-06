@@ -260,43 +260,33 @@ func (s *Store) DeleteEdgesByKindAndPackages(kind string, pkgPaths []string) err
 }
 
 // DeleteByFile removes all symbols (and their edges) from a given file.
-// Used during incremental reindexing when a file changes.
+// Used during incremental reindexing when a file changes. All deletes run in
+// a single transaction so a partial failure cannot orphan rows.
 func (s *Store) DeleteByFile(file string) error {
-	rows, err := s.db.Query(`SELECT id FROM symbols WHERE file = ?`, file)
+	tx, err := s.db.Begin()
 	if err != nil {
-		return fmt.Errorf("query symbols for file %s: %w", file, err)
+		return fmt.Errorf("begin tx: %w", err)
 	}
-
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return fmt.Errorf("scan symbol id: %w", err)
-		}
-		ids = append(ids, id)
+	if _, err := tx.Exec(
+		`DELETE FROM symbols_fts WHERE id IN (SELECT id FROM symbols WHERE file = ?)`,
+		file,
+	); err != nil {
+		tx.Rollback() //nolint:errcheck
+		return fmt.Errorf("delete fts for file %s: %w", file, err)
 	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return fmt.Errorf("iterate symbols for file %s: %w", file, err)
+	if _, err := tx.Exec(
+		`DELETE FROM edges WHERE from_id IN (SELECT id FROM symbols WHERE file = ?)
+		    OR to_id IN (SELECT id FROM symbols WHERE file = ?)`,
+		file, file,
+	); err != nil {
+		tx.Rollback() //nolint:errcheck
+		return fmt.Errorf("delete edges for file %s: %w", file, err)
 	}
-	// Close before writing — an open SELECT cursor holds a shared lock that
-	// blocks write locks on other connections in non-WAL mode.
-	rows.Close()
-
-	for _, id := range ids {
-		if _, err := s.db.Exec(`DELETE FROM symbols_fts WHERE id = ?`, id); err != nil {
-			return fmt.Errorf("delete fts for %s: %w", id, err)
-		}
-		if _, err := s.db.Exec(`DELETE FROM edges WHERE from_id = ? OR to_id = ?`, id, id); err != nil {
-			return fmt.Errorf("delete edges for %s: %w", id, err)
-		}
-		if _, err := s.db.Exec(`DELETE FROM symbols WHERE id = ?`, id); err != nil {
-			return fmt.Errorf("delete symbol %s: %w", id, err)
-		}
+	if _, err := tx.Exec(`DELETE FROM symbols WHERE file = ?`, file); err != nil {
+		tx.Rollback() //nolint:errcheck
+		return fmt.Errorf("delete symbols for file %s: %w", file, err)
 	}
-
-	return nil
+	return tx.Commit()
 }
 
 // SearchFTS performs full-text search across symbol names, signatures, and docstrings.
