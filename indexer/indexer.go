@@ -83,10 +83,10 @@ func (idx *Indexer) Run() error {
 
 	// Collect non-excluded packages for symbol indexing.
 	var indexable []*packages.Package
-	var skipped int
+	var skippedPaths []string
 	for _, pkg := range pkgs {
 		if idx.isExcluded(pkg) {
-			skipped++
+			skippedPaths = append(skippedPaths, pkg.PkgPath)
 			continue
 		}
 		indexable = append(indexable, pkg)
@@ -98,7 +98,10 @@ func (idx *Indexer) Run() error {
 		}
 	}
 
-	log.Printf("indexed %d packages (%d skipped as generated)", len(indexable), skipped)
+	log.Printf("indexed %d packages (%d skipped as generated)", len(indexable), len(skippedPaths))
+	if len(skippedPaths) > 0 {
+		log.Printf("skipped packages: %s", strings.Join(skippedPaths, ", "))
+	}
 
 	if idx.cfg.IndexDeps {
 		if err := idx.indexDependencies(pkgs); err != nil {
@@ -518,7 +521,7 @@ func isGeneratedFile(path string) bool {
 			return true
 		}
 		switch part {
-		case "vendor", "gen", "generated", "mock", "mocks":
+		case "vendor", "gen", "generated":
 			return true
 		}
 	}
