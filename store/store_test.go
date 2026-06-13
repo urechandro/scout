@@ -412,6 +412,63 @@ func TestDeleteByFile(t *testing.T) {
 	}
 }
 
+// --- ResetIndex ---
+
+func TestResetIndex(t *testing.T) {
+	s := newTestStore(t)
+
+	seedSymbols(t, s, []Symbol{
+		{ID: "pkg.A", Package: "pkg", Name: "A", Kind: "func", Signature: "func A()", File: "a.go"},
+		{ID: "pkg.B", Package: "pkg", Name: "B", Kind: "func", Signature: "func B()", File: "b.go"},
+	})
+	seedEdges(t, s, []Edge{
+		{FromID: "pkg.A", ToID: "pkg.B", Kind: "calls"},
+	})
+	if err := s.UpsertConvention(Convention{
+		Name: "demo", Terms: []string{"x"}, Description: "y",
+	}); err != nil {
+		t.Fatalf("upsert convention: %v", err)
+	}
+	if err := s.SetMeta("last_indexed", "42"); err != nil {
+		t.Fatalf("set meta: %v", err)
+	}
+
+	if err := s.ResetIndex(); err != nil {
+		t.Fatalf("ResetIndex: %v", err)
+	}
+
+	if _, err := s.GetSymbol("pkg.A"); err != ErrNotFound {
+		t.Errorf("A should be gone, err=%v", err)
+	}
+	hits, _ := s.SearchFTS("A", 10)
+	if len(hits) != 0 {
+		t.Errorf("FTS should be empty, got %d hits", len(hits))
+	}
+	callees, _ := s.GetCallees("pkg.A")
+	if len(callees) != 0 {
+		t.Errorf("edges should be gone, got %v", symbolIDs(callees))
+	}
+	if c, _ := s.GetConvention("demo"); c != nil {
+		t.Errorf("convention should be gone, got %+v", c)
+	}
+
+	// index_meta is preserved.
+	v, err := s.GetMeta("last_indexed")
+	if err != nil {
+		t.Fatalf("GetMeta: %v", err)
+	}
+	if v != "42" {
+		t.Errorf("last_indexed = %q, want %q", v, "42")
+	}
+
+	// Store is still usable after reset.
+	if err := s.UpsertSymbol(Symbol{
+		ID: "pkg.C", Package: "pkg", Name: "C", Kind: "func", Signature: "func C()", File: "c.go",
+	}); err != nil {
+		t.Fatalf("upsert after reset: %v", err)
+	}
+}
+
 // --- DeleteEdgesByKind ---
 
 func TestDeleteEdgesByKind(t *testing.T) {

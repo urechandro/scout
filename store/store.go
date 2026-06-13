@@ -289,6 +289,30 @@ func (s *Store) DeleteByFile(file string) error {
 	return tx.Commit()
 }
 
+// ResetIndex clears all indexed symbols, edges, and conventions so a full
+// reindex starts from a clean slate. The index_meta table is preserved.
+// Runs in a single transaction.
+func (s *Store) ResetIndex() error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	stmts := []string{
+		`DELETE FROM symbols_fts`,
+		`DELETE FROM symbols`,
+		`DELETE FROM edges`,
+		`DELETE FROM conventions_fts`,
+		`DELETE FROM conventions`,
+	}
+	for _, stmt := range stmts {
+		if _, err := tx.Exec(stmt); err != nil {
+			tx.Rollback() //nolint:errcheck
+			return fmt.Errorf("reset index (%s): %w", stmt, err)
+		}
+	}
+	return tx.Commit()
+}
+
 // SearchFTS performs full-text search across symbol names, signatures, and docstrings.
 func (s *Store) SearchFTS(query string, limit int) ([]Symbol, error) {
 	rows, err := s.db.Query(`

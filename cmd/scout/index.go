@@ -37,6 +37,15 @@ func cmdIndex(args []string) {
 	}
 	defer s.Close()
 
+	// Full index starts from a clean slate so that symbols, edges, and
+	// conventions removed since the last run don't linger as orphans.
+	// Incremental updates go through `scout reindex` / the watcher's RunFiles
+	// path, which deletes per file.
+	if err := s.ResetIndex(); err != nil {
+		logger.Error("reset index", "err", err)
+		os.Exit(1)
+	}
+
 	var dirs []string
 	if *dir != "" {
 		dirs = []string{*dir}
