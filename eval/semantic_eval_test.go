@@ -91,6 +91,50 @@ func TestSemanticFixtures(t *testing.T) {
 	}
 }
 
+// TestSemanticFixturesBaseline runs the same meaning-based fixtures against
+// the FTS-only engine. It is the A in the A/B — paired with
+// TestSemanticFixtures it shows the recall delta the vector layer adds.
+//
+// This test never fails on must_include misses; misses are the expected
+// FTS-only outcome on meaning-based queries. It logs a hit count instead,
+// so the comparison is `grep "baseline hit rate"` and `grep "semantic hit rate"`
+// in the test output.
+func TestSemanticFixturesBaseline(t *testing.T) {
+	if testing.Short() {
+		t.Skip("baseline fixtures index scout's source — skipping under -short")
+	}
+	eng := setupIndex(t)
+	fixtures, err := LoadFixtures("semantic_fixtures.yaml")
+	if err != nil {
+		t.Fatalf("load semantic fixtures: %v", err)
+	}
+	hits := 0
+	for _, f := range fixtures {
+		t.Run(f.Name, func(t *testing.T) {
+			result, err := RunFixture(eng, f)
+			if err != nil {
+				t.Fatalf("%s: %v", f.Tool, err)
+			}
+			data, mErr := json.Marshal(result)
+			if mErr != nil {
+				t.Fatalf("marshal: %v", mErr)
+			}
+			ok := true
+			for _, want := range f.MustInclude {
+				if !bytes.Contains(data, []byte(want)) {
+					ok = false
+					t.Logf("FTS-only miss: must_include %q absent (%d bytes returned)", want, len(data))
+				}
+			}
+			if ok {
+				hits++
+				t.Logf("FTS-only hit (%d bytes)", len(data))
+			}
+		})
+	}
+	t.Logf("baseline hit rate: %d/%d (%.0f%%)", hits, len(fixtures), 100*float64(hits)/float64(len(fixtures)))
+}
+
 // setupSemanticIndex builds an index of scout's own source, runs the embedder
 // pass against the configured Ollama model, and returns an engine with
 // Phase 3 wired up. Distinct from setupIndex (FTS-only) so the two test
