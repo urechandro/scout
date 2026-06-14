@@ -3,12 +3,19 @@ package query
 
 import (
 	"bufio"
+	"context"
 	"fmt"
+	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
+	"github.com/urechandro/scout/embedder"
 	"github.com/urechandro/scout/store"
 )
 
@@ -54,14 +61,69 @@ type ContextResponse struct {
 	Truncated int             `json:"truncated"`
 }
 
-// Engine executes context queries against a Store.
-type Engine struct {
-	store *store.Store
+// Options configures optional Engine behavior.
+type Options struct {
+	// Embedder is the semantic-search client used by Phase 3 of
+	// GetRelevantContext. Nil disables Phase 3 silently — the engine
+	// behaves exactly as it did before semantic search was wired in.
+	Embedder embedder.Client
+	// PhaseThreeTimeout caps how long Phase 3 (query embed + cosine scan)
+	// is allowed to take per call. 0 means use the default (1.5s).
+	PhaseThreeTimeout time.Duration
 }
 
-// New creates a query Engine backed by the given store.
-func New(s *store.Store) *Engine {
-	return &Engine{store: s}
+// Engine executes context queries against a Store.
+type Engine struct {
+	store    *store.Store
+	embedder embedder.Client
+	p3Budget time.Duration
+
+	// Slab state for Phase 3. The slab is a flat in-memory copy of
+	// (id, vector) for every symbol that has an embedding under the
+	// configured model. Loaded lazily on the first Phase 3 call and
+	// reloaded the next time Phase 3 runs after MarkVectorsDirty fires.
+	slabMu    sync.Mutex
+	slab      []slabRow
+	slabModel string
+	slabDim   int
+	slabDirty atomic.Bool
+
+	// One-time-log gates for Phase 3 failure modes. The design says
+	// "log once" so a misconfigured embedder or model swap doesn't
+	// flood the log on every query.
+	loggedEmbedErr atomic.Bool
+	loggedDimSkew  atomic.Bool
+}
+
+// slabRow is one (id, vector) pair in the in-memory cosine slab.
+type slabRow struct {
+	id  string
+	vec []float32
+}
+
+const defaultPhaseThreeTimeout = 1500 * time.Millisecond
+
+// New creates a query Engine backed by the given store. Pass Options{} to
+// keep the legacy FTS-only behavior; set Options.Embedder to enable Phase 3
+// semantic retrieval inside GetRelevantContext.
+func New(s *store.Store, opts Options) *Engine {
+	timeout := opts.PhaseThreeTimeout
+	if timeout <= 0 {
+		timeout = defaultPhaseThreeTimeout
+	}
+	return &Engine{
+		store:    s,
+		embedder: opts.Embedder,
+		p3Budget: timeout,
+	}
+}
+
+// MarkVectorsDirty signals that the underlying embeddings in the store have
+// changed (typically because the watcher's PostReindex hook just re-embedded a
+// batch of symbols). The next Phase 3 call reloads the slab before scoring.
+// Safe to call from any goroutine.
+func (e *Engine) MarkVectorsDirty() {
+	e.slabDirty.Store(true)
 }
 
 // queryType classifies a query as either a precise symbol lookup or a broad
@@ -196,6 +258,15 @@ func (e *Engine) GetRelevantContext(req ContextRequest) (*ContextResponse, error
 		}
 	}
 
+	// Phase 3: vector cosine. Discovery queries only — precise queries are
+	// deterministic by design, and fuzzy semantic matches would add noise
+	// without value. Silently no-ops when no embedder is configured, when
+	// the slab is empty, when the embedder is unreachable, or when stored
+	// vectors don't match the query embedding dimension.
+	if !skipFTS && e.embedder != nil {
+		e.phaseThreeVectorSearch(req.Task, scored)
+	}
+
 	scored = dedup(scored)
 
 	if req.MaxExpansionDepth > 0 {
@@ -227,6 +298,210 @@ func (e *Engine) GetRelevantContext(req ContextRequest) (*ContextResponse, error
 		Symbols:   kept,
 		Truncated: truncated,
 	}, nil
+}
+
+// phaseThreeTopK is how many cosine hits the engine merges into the candidate
+// pool. Larger doesn't help — dedup and trimToBudget would discard them; the
+// extra cost is just symbol-row lookups in GetSymbol.
+const phaseThreeTopK = 30
+
+// phaseThreeVectorBonus scales cosine similarity (in [-1, 1]) up to roughly
+// the FTS positional score range. A perfect cosine of 1.0 ends up at 1.5,
+// which sits just below an exact-name hit (3.0+) but well above the long
+// tail of FTS matches.
+const phaseThreeVectorBonus = 1.5
+
+// phaseThreeVectorSearch embeds the query, cosine-scores it against the slab,
+// hydrates the top-K hits via GetSymbol, and merges them into scored.
+// Every failure mode is a silent no-op — semantic search is a strict
+// recall-boost, never a recall-loss compared to FTS-only.
+func (e *Engine) phaseThreeVectorSearch(task string, scored map[string]*SymbolSummary) {
+	model := e.embedder.Model()
+	if model == "" {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), e.p3Budget)
+	defer cancel()
+
+	vecs, err := e.embedder.Embed(ctx, []string{task})
+	if err != nil || len(vecs) == 0 || len(vecs[0]) == 0 {
+		if err != nil && e.loggedEmbedErr.CompareAndSwap(false, true) {
+			log.Printf("query: phase-3 embed query failed: %v (further errors suppressed)", err)
+		}
+		return
+	}
+	queryVec := vecs[0]
+
+	slab, slabDim, err := e.getOrLoadSlab(model)
+	if err != nil || len(slab) == 0 {
+		return
+	}
+
+	if slabDim != len(queryVec) {
+		if e.loggedDimSkew.CompareAndSwap(false, true) {
+			log.Printf("query: phase-3 dim mismatch: slab=%d query=%d for model=%s — reindex with `scout index` (further warnings suppressed)",
+				slabDim, len(queryVec), model)
+		}
+		return
+	}
+
+	topK := topKCosine(slab, queryVec, phaseThreeTopK)
+	for _, hit := range topK {
+		if _, exists := scored[hit.id]; exists {
+			// Phase 1 / Phase 2 already scored it — don't overwrite a
+			// likely-higher exact-match or FTS score.
+			continue
+		}
+		sym, err := e.store.GetSymbol(hit.id)
+		if err != nil || sym == nil {
+			// Slab is stale relative to the symbol table (rare race with a
+			// concurrent reindex). Skip silently — next dirty reload fixes it.
+			continue
+		}
+		score := hit.cosine*phaseThreeVectorBonus +
+			kindWeight(*sym) +
+			implBoost(*sym) +
+			generatedPenalty(*sym)
+		s := toSummary(*sym, score, "vector match")
+		scored[sym.ID] = &s
+	}
+}
+
+// getOrLoadSlab returns the in-memory cosine slab for the given model,
+// loading it from the store on first use and reloading it when
+// MarkVectorsDirty has been called since the last load. The reload is
+// gated by a mutex so concurrent queries don't all reload at once.
+func (e *Engine) getOrLoadSlab(model string) ([]slabRow, int, error) {
+	e.slabMu.Lock()
+	defer e.slabMu.Unlock()
+
+	needsLoad := e.slab == nil || e.slabModel != model || e.slabDirty.Load()
+	if !needsLoad {
+		return e.slab, e.slabDim, nil
+	}
+
+	rows, err := e.store.LoadEmbeddings(model)
+	if err != nil {
+		return nil, 0, err
+	}
+	slab := make([]slabRow, 0, len(rows))
+	dim := 0
+	for _, r := range rows {
+		if len(r.Vector) == 0 {
+			continue
+		}
+		if dim == 0 {
+			dim = len(r.Vector)
+		}
+		if len(r.Vector) != dim {
+			// One row has a different dim than the others — almost certainly
+			// a partial reindex mid-model-swap. Skip it; the next pass will
+			// rewrite it consistently.
+			continue
+		}
+		slab = append(slab, slabRow{id: r.ID, vec: r.Vector})
+	}
+	e.slab = slab
+	e.slabModel = model
+	e.slabDim = dim
+	e.slabDirty.Store(false)
+	// New slab, new lease on logging — let one warning through again if a
+	// dim mismatch persists across the reload.
+	e.loggedDimSkew.Store(false)
+	return e.slab, e.slabDim, nil
+}
+
+// vectorHit is one row of the top-K cosine result.
+type vectorHit struct {
+	id     string
+	cosine float64
+}
+
+// topKCosine scans the slab once, keeping the K highest cosine scores in a
+// small inline min-heap. ~14k rows × 768 dims × O(1) heap ops ≈ 50ms.
+// Returns hits in descending cosine order.
+func topKCosine(slab []slabRow, query []float32, k int) []vectorHit {
+	if k <= 0 || len(slab) == 0 || len(query) == 0 {
+		return nil
+	}
+	qNorm := vecNorm(query)
+	if qNorm == 0 {
+		return nil
+	}
+	heap := make([]vectorHit, 0, k)
+	for _, row := range slab {
+		rNorm := vecNorm(row.vec)
+		if rNorm == 0 {
+			continue
+		}
+		c := float64(dot(query, row.vec)) / (qNorm * rNorm)
+		if len(heap) < k {
+			heap = append(heap, vectorHit{id: row.id, cosine: c})
+			if len(heap) == k {
+				heapifyMinCosine(heap)
+			}
+			continue
+		}
+		if c <= heap[0].cosine {
+			continue
+		}
+		heap[0] = vectorHit{id: row.id, cosine: c}
+		siftDownCosine(heap, 0)
+	}
+	sort.Slice(heap, func(i, j int) bool { return heap[i].cosine > heap[j].cosine })
+	return heap
+}
+
+func dot(a, b []float32) float64 {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	var s float64
+	for i := 0; i < n; i++ {
+		s += float64(a[i]) * float64(b[i])
+	}
+	return s
+}
+
+func vecNorm(v []float32) float64 {
+	var s float64
+	for _, x := range v {
+		s += float64(x) * float64(x)
+	}
+	if s == 0 {
+		return 0
+	}
+	return math.Sqrt(s)
+}
+
+// heapifyMinCosine turns a slice into a min-heap by cosine (smallest at root).
+// Smallest-at-root lets topKCosine drop the worst entry in O(log K) when a
+// better candidate arrives.
+func heapifyMinCosine(h []vectorHit) {
+	for i := len(h)/2 - 1; i >= 0; i-- {
+		siftDownCosine(h, i)
+	}
+}
+
+func siftDownCosine(h []vectorHit, i int) {
+	n := len(h)
+	for {
+		left := 2*i + 1
+		if left >= n {
+			return
+		}
+		smallest := left
+		if right := left + 1; right < n && h[right].cosine < h[left].cosine {
+			smallest = right
+		}
+		if h[i].cosine <= h[smallest].cosine {
+			return
+		}
+		h[i], h[smallest] = h[smallest], h[i]
+		i = smallest
+	}
 }
 
 // BodyResponse is returned by GetBody. It includes the symbol and optional

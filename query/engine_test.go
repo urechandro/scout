@@ -389,7 +389,7 @@ func TestGetRelevantContext_ExactNameLookup(t *testing.T) {
 		},
 	})
 
-	engine := New(s)
+	engine := New(s, Options{})
 	resp, err := engine.GetRelevantContext(ContextRequest{
 		Task:         "CreateShipmentLeg",
 		BudgetTokens: 4000,
@@ -439,7 +439,7 @@ func TestGetRelevantContext_FTSFallback(t *testing.T) {
 		},
 	})
 
-	engine := New(s)
+	engine := New(s, Options{})
 	resp, err := engine.GetRelevantContext(ContextRequest{
 		Task:         "find auth token validation",
 		BudgetTokens: 4000,
@@ -501,7 +501,7 @@ func TestGetUnimplemented_MissingRPC(t *testing.T) {
 		},
 	})
 
-	engine := New(s)
+	engine := New(s, Options{})
 	resp, err := engine.GetUnimplemented("ShipmentService")
 	if err != nil {
 		t.Fatalf("GetUnimplemented: %v", err)
@@ -575,7 +575,7 @@ func TestGetUnimplemented_StubbedRPC(t *testing.T) {
 		},
 	})
 
-	engine := New(s)
+	engine := New(s, Options{})
 	resp, err := engine.GetUnimplemented("TestService")
 	if err != nil {
 		t.Fatalf("GetUnimplemented: %v", err)
@@ -613,7 +613,7 @@ func TestGetUnimplemented_FullyImplemented(t *testing.T) {
 		},
 	})
 
-	engine := New(s)
+	engine := New(s, Options{})
 	resp, err := engine.GetUnimplemented("Svc")
 	if err != nil {
 		t.Fatalf("GetUnimplemented: %v", err)
@@ -629,7 +629,7 @@ func TestGetUnimplemented_FullyImplemented(t *testing.T) {
 
 func TestGetUnimplemented_ServiceNotFound(t *testing.T) {
 	s := newTestStore(t)
-	engine := New(s)
+	engine := New(s, Options{})
 	_, err := engine.GetUnimplemented("NonexistentService")
 	if err == nil {
 		t.Error("expected error for nonexistent service")
@@ -694,7 +694,7 @@ func TestGetBody_References(t *testing.T) {
 		},
 	})
 
-	engine := New(s)
+	engine := New(s, Options{})
 	resp, err := engine.GetBody("myapp/svc.Server.CreateShipment")
 	if err != nil {
 		t.Fatalf("GetBody: %v", err)
@@ -740,7 +740,7 @@ func TestGetBody_EmptyID_ReturnsError(t *testing.T) {
 		{ID: "proto.Check", Package: "proto", Name: "Check", Kind: "func", Signature: "func Check()", File: "check.go"},
 	})
 
-	engine := New(s)
+	engine := New(s, Options{})
 	_, err := engine.GetBody("")
 	if err == nil {
 		t.Fatal("GetBody(\"\") returned nil error, want an error")
@@ -759,7 +759,7 @@ func TestGetBody_NoReferences_EmptyBody(t *testing.T) {
 		},
 	})
 
-	engine := New(s)
+	engine := New(s, Options{})
 	resp, err := engine.GetBody("myapp/model.Shipment")
 	if err != nil {
 		t.Fatalf("GetBody: %v", err)
@@ -814,7 +814,7 @@ func TestGetPattern_MessageBodies(t *testing.T) {
 		},
 	})
 
-	engine := New(s)
+	engine := New(s, Options{})
 	resp, err := engine.GetPattern("CreateShipment")
 	if err != nil {
 		t.Fatalf("GetPattern: %v", err)
@@ -881,7 +881,7 @@ func TestGetImpact_CrossLayerLinkage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	engine := New(s)
+	engine := New(s, Options{})
 	resp, err := engine.GetImpact("myapp/svc.Server.CreateShipment")
 	if err != nil {
 		t.Fatalf("GetImpact: %v", err)
@@ -940,7 +940,7 @@ func TestGetImpact_RPCMessages(t *testing.T) {
 		},
 	})
 
-	engine := New(s)
+	engine := New(s, Options{})
 	resp, err := engine.GetImpact("myapp/proto.ShipmentService.CreateShipment")
 	if err != nil {
 		t.Fatalf("GetImpact: %v", err)
@@ -961,7 +961,7 @@ func TestGetImpact_RPCMessages(t *testing.T) {
 
 func TestGetImpact_SymbolNotFound(t *testing.T) {
 	s := newTestStore(t)
-	engine := New(s)
+	engine := New(s, Options{})
 	_, err := engine.GetImpact("nonexistent.Symbol")
 	if err == nil {
 		t.Error("expected error for non-existent symbol")
@@ -1002,7 +1002,7 @@ func TestGetFlow_WithCallersAndCallees(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	engine := New(s)
+	engine := New(s, Options{})
 	resp, err := engine.GetFlow("myapp/svc.Server.CreateShipment")
 	if err != nil {
 		t.Fatalf("GetFlow: %v", err)
@@ -1025,7 +1025,7 @@ func TestGetFlow_WithCallersAndCallees(t *testing.T) {
 
 func TestGetFlow_SymbolNotFound(t *testing.T) {
 	s := newTestStore(t)
-	engine := New(s)
+	engine := New(s, Options{})
 	_, err := engine.GetFlow("nonexistent.Symbol")
 	if err == nil {
 		t.Error("expected error for non-existent symbol")
@@ -1064,7 +1064,7 @@ func TestGetCallers_DirectEdges(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	engine := New(s)
+	engine := New(s, Options{})
 	callers, err := engine.GetCallers("myapp/svc.Server.CreateShipment")
 	if err != nil {
 		t.Fatalf("GetCallers: %v", err)
@@ -1108,7 +1108,7 @@ func TestGetCallers_FallbackToImplements(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	engine := New(s)
+	engine := New(s, Options{})
 	callers, err := engine.GetCallers("myapp/svc.Server.CreateShipment")
 	if err != nil {
 		t.Fatalf("GetCallers: %v", err)
@@ -1143,7 +1143,7 @@ func TestGetCallers_FallbackToBodyReference(t *testing.T) {
 		},
 	})
 
-	engine := New(s)
+	engine := New(s, Options{})
 	callers, err := engine.GetCallers("myapp/util.NewClient")
 	if err != nil {
 		t.Fatalf("GetCallers: %v", err)
@@ -1189,7 +1189,7 @@ func TestGetCallees_DirectEdges(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	engine := New(s)
+	engine := New(s, Options{})
 	callees, err := engine.GetCallees("myapp/svc.Server.CreateShipment")
 	if err != nil {
 		t.Fatalf("GetCallees: %v", err)
@@ -1227,7 +1227,7 @@ func TestGetCallees_FallbackToBody(t *testing.T) {
 	})
 
 	// No call edges — should fall back to body extraction.
-	engine := New(s)
+	engine := New(s, Options{})
 	callees, err := engine.GetCallees("myapp/svc.Server.CreateShipment")
 	if err != nil {
 		t.Fatalf("GetCallees: %v", err)
@@ -1271,7 +1271,7 @@ func TestGetConventions_DocumentedConvention(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	engine := New(s)
+	engine := New(s, Options{})
 	result, err := engine.GetConventions("transactional outbox")
 	if err != nil {
 		t.Fatalf("GetConventions: %v", err)
@@ -1308,7 +1308,7 @@ func TestGetConventions_FTSFallback(t *testing.T) {
 		},
 	})
 
-	engine := New(s)
+	engine := New(s, Options{})
 	result, err := engine.GetConventions("rate limiting")
 	if err != nil {
 		t.Fatalf("GetConventions: %v", err)
@@ -1324,7 +1324,7 @@ func TestGetConventions_FTSFallback(t *testing.T) {
 
 func TestGetConventions_NoMatch(t *testing.T) {
 	s := newTestStore(t)
-	engine := New(s)
+	engine := New(s, Options{})
 	result, err := engine.GetConventions("quantum computing")
 	if err != nil {
 		t.Fatalf("GetConventions: %v", err)
@@ -1367,7 +1367,7 @@ func TestExpand_OneHop(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	engine := New(s)
+	engine := New(s, Options{})
 	seeds := map[string]*SymbolSummary{
 		"myapp/svc.Server.CreateShipment": {ID: "myapp/svc.Server.CreateShipment"},
 	}
@@ -1409,7 +1409,7 @@ func TestExpand_ZeroDepth(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	engine := New(s)
+	engine := New(s, Options{})
 	seeds := map[string]*SymbolSummary{
 		"myapp/svc.Server.CreateShipment": {ID: "myapp/svc.Server.CreateShipment"},
 	}
@@ -1444,7 +1444,7 @@ func TestExpand_CallerScore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	engine := New(s)
+	engine := New(s, Options{})
 	seeds := map[string]*SymbolSummary{
 		"myapp/svc.Server.CreateShipment": {ID: "myapp/svc.Server.CreateShipment"},
 	}
@@ -1561,7 +1561,7 @@ func TestGetCallers_FuzzyResolution(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	engine := New(s)
+	engine := New(s, Options{})
 	// Use a suffix that should resolve via fuzzy lookup.
 	callers, err := engine.GetCallers("svc.Server.CreateShipment")
 	if err != nil {
