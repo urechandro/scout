@@ -1,10 +1,27 @@
 # Meaning-based fixtures for the Phase 3 semantic-retrieval layer.
 #
 # These queries are written to be **disjoint** from the target symbol's name,
-# signature, body, and docstring vocabulary. The point is to surface code by
-# what it *does* without naming any token an FTS lexer could match. This is
-# the gap Phase 3 is meant to close; if FTS hits these, the fixture is too
-# easy and should be rewritten.
+# signature, and docstring vocabulary (body isn't FTS-indexed). The point is
+# to surface code by what it *does*, expressed in different words than the
+# code itself uses. Some queries still hit FTS — that's not a bug, it's the
+# corpus's vocabulary density doing its job; those fixtures still measure
+# whether Phase 3 *holds onto* an FTS-found hit when vectors also compete
+# for budget (the displacement axis). FTS-miss fixtures measure pure recall
+# the vector layer adds.
+#
+# Per-fixture FTS-only behavior (as of 2026-06-14, on scout's own index
+# with nomic-embed-text vectors). Useful for tracking which axis a tuning
+# change moves:
+#   FTS-only HIT  : query_classifier, dirty_signal, source_first,
+#                   log_bridge, vector_packer, pre_reset_snapshot,
+#                   embed_input_shaper, blast_radius, duplicate_killer
+#   FTS-only MISS : file_watcher, proto_link, topk_picker,
+#                   unembedded_picker, health_check, graph_walk
+#
+# Current A/B headline (15 fixtures, ±6.7pp per-fixture noise):
+#   FTS-only baseline : 9 / 15 (60%)
+#   Phase 3 semantic  : 13 / 15 (87%)  — known: log_bridge displaced,
+#                                        health_check semantic-gap
 #
 # These tests are skipped by default. Set SCOUT_OLLAMA_HOST (e.g.
 # http://localhost:11434) and SCOUT_OLLAMA_MODEL (e.g. nomic-embed-text) to
@@ -65,4 +82,74 @@
     query: picks the most similar entries from a list of high-dimensional points
   must_include:
     - github.com/urechandro/scout/query.topKCosine
+  max_bytes: 12000
+
+# --- Round 2: additional disjoint-vocab fixtures (added 2026-06-14) ---
+# These widen the A/B from 7 to 15 so per-fixture noise (±14pp) doesn't
+# dominate the signal when tuning Phase 3 knobs. Same discipline applies:
+# the query must not share tokens with the target's name, signature, or
+# docstring after stop-word stripping.
+
+- name: semantic_finds_vector_packer
+  tool: get_relevant_context
+  args:
+    query: compresses a list of decimal values into a compact form for storage
+  must_include:
+    - github.com/urechandro/scout/store.EncodeEmbedding
+  max_bytes: 12000
+
+- name: semantic_finds_unembedded_picker
+  tool: get_relevant_context
+  args:
+    query: names every code entry that still needs a fresh fingerprint computed for it
+  must_include:
+    - github.com/urechandro/scout/store.Store.ListUnembedded
+  max_bytes: 12000
+
+- name: semantic_finds_pre_reset_snapshot
+  tool: get_relevant_context
+  args:
+    query: stashes the prior fingerprints aside before a destructive rebuild so they can be put back later
+  must_include:
+    - github.com/urechandro/scout/store.Store.SnapshotEmbeddings
+  max_bytes: 12000
+
+- name: semantic_finds_embed_input_shaper
+  tool: get_relevant_context
+  args:
+    query: decides which descriptive bits of a code entry get sent off to be turned into a fingerprint
+  must_include:
+    - github.com/urechandro/scout/embedder.EmbeddingText
+  max_bytes: 12000
+
+- name: semantic_finds_health_check
+  tool: get_relevant_context
+  args:
+    query: confirms the locally-running helper is alive and has the right tag pulled before any real work starts
+  must_include:
+    - github.com/urechandro/scout/embedder.ProbeOllama
+  max_bytes: 12000
+
+- name: semantic_finds_blast_radius
+  tool: get_relevant_context
+  args:
+    query: estimates the full spread of breakage if you change a code item's contract
+  must_include:
+    - github.com/urechandro/scout/query.Engine.GetImpact
+  max_bytes: 12000
+
+- name: semantic_finds_graph_walk
+  tool: get_relevant_context
+  args:
+    query: broadens an initial set of points by stepping through call relationships one hop outward
+  must_include:
+    - github.com/urechandro/scout/query.Engine.expand
+  max_bytes: 12000
+
+- name: semantic_finds_duplicate_killer
+  tool: get_relevant_context
+  args:
+    query: removes near-identical entries before showing results so the same thing does not appear repeatedly
+  must_include:
+    - github.com/urechandro/scout/query.dedup
   max_bytes: 12000
