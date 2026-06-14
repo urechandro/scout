@@ -309,6 +309,14 @@ const phaseThreeTopK = 30
 // the FTS positional score range. A perfect cosine of 1.0 ends up at 1.5,
 // which sits just below an exact-name hit (3.0+) but well above the long
 // tail of FTS matches.
+//
+// Empirically best on the recall A/B in eval/semantic_fixtures.yaml: gains 3
+// hits FTS misses while costing 1 hit FTS had (slogPrintfAdapter — the
+// vector hits displace it past trimToBudget's greedy cutoff). Lowering this
+// to 0.8 didn't recover the displaced hit and additionally lost two
+// vector-only hits — the constant is a symmetric knob that trades
+// displacement and surfacing together, not a one-sided fix. A real fix
+// (asymmetric: protect FTS hits *and* surface vector hits) is a follow-up.
 const phaseThreeVectorBonus = 1.5
 
 // phaseThreeVectorSearch embeds the query, cosine-scores it against the slab,
