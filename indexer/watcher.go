@@ -26,6 +26,7 @@ type Watcher struct {
 	store        *store.Store
 	root         string
 	fullDebounce time.Duration
+	postReindex  func(kind string, files []string)
 
 	mu          sync.Mutex
 	pendingFull map[string]bool
@@ -46,6 +47,13 @@ type WatcherConfig struct {
 	// TSIndexer is an optional TypeScript indexer. When set, the watcher
 	// monitors .ts/.tsx files and triggers debounced reindexing.
 	TSIndexer *tsindexer.Indexer
+	// PostReindex is invoked after each successful debounced full reindex of
+	// any kind ("go", "proto", "ts"). The watcher passes the file list that
+	// triggered it. Used by serve.go to re-embed symbols whose source text
+	// changed. Runs synchronously in the watcher's timer goroutine, so
+	// callbacks should be fast or self-bound (e.g. cap how much work they do
+	// per invocation).
+	PostReindex func(kind string, files []string)
 }
 
 // NewWatcher creates a file watcher for the given indexer and store.
@@ -63,6 +71,7 @@ func NewWatcher(idx *Indexer, s *store.Store, cfg WatcherConfig) *Watcher {
 		tsIdx:        cfg.TSIndexer,
 		root:         cfg.Root,
 		fullDebounce: debounce,
+		postReindex:  cfg.PostReindex,
 		pendingFull:  make(map[string]bool),
 	}
 }
@@ -157,6 +166,7 @@ func (w *Watcher) handleProtoChange(path string) {
 	}
 	log.Printf("watcher: proto reindex %s (%v)", filepath.Base(path), time.Since(start))
 	w.relinkProto("proto")
+	w.notifyPostReindex("proto", []string{path})
 }
 
 func (w *Watcher) handleConventionsChange(path string) {
@@ -200,6 +210,17 @@ func (w *Watcher) runFullReindex() {
 	}
 	log.Printf("watcher: full reindex %d files (%v)", len(files), time.Since(start))
 	w.relinkProto("go")
+	w.notifyPostReindex("go", files)
+}
+
+// notifyPostReindex fires the PostReindex callback if one was configured.
+// Runs synchronously — callers must keep the callback cheap or self-rate-limit.
+// Errors are entirely the callback's concern; we don't observe them here.
+func (w *Watcher) notifyPostReindex(kind string, files []string) {
+	if w.postReindex == nil {
+		return
+	}
+	w.postReindex(kind, files)
 }
 
 func (w *Watcher) addDirs(watcher *fsnotify.Watcher) error {
@@ -259,6 +280,7 @@ func (w *Watcher) runTSReindex() {
 		return
 	}
 	log.Printf("watcher: ts reindex (%v)", time.Since(start))
+	w.notifyPostReindex("ts", nil)
 }
 
 func isGoSource(path string) bool {

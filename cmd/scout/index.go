@@ -1,13 +1,17 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/urechandro/scout/config"
+	"github.com/urechandro/scout/embedder"
 	"github.com/urechandro/scout/indexer"
 	"github.com/urechandro/scout/protoindexer"
 	"github.com/urechandro/scout/store"
@@ -36,6 +40,16 @@ func cmdIndex(args []string) {
 		os.Exit(1)
 	}
 	defer s.Close()
+
+	// Snapshot existing embeddings before the reset so the embedder pass
+	// after the reindex can skip symbols whose source text didn't change.
+	// Without this, every full index would re-embed the whole corpus —
+	// ~90s on a 14k-symbol repo. Warn-and-continue on snapshot failure:
+	// the embedder pass will simply re-embed everything.
+	snapshots, err := s.SnapshotEmbeddings()
+	if err != nil {
+		logger.Warn("snapshot embeddings", "err", err)
+	}
 
 	// Full index starts from a clean slate so that symbols, edges, and
 	// conventions removed since the last run don't linger as orphans.
@@ -141,11 +155,74 @@ func cmdIndex(args []string) {
 		}
 	}
 
+	// Restore vectors whose source text survived the reindex. The embedder
+	// pass below only embeds what remains (new symbols + ones whose
+	// name/signature/docstring changed).
+	if len(snapshots) > 0 {
+		restored, err := s.RestoreEmbeddings(snapshots)
+		if err != nil {
+			logger.Warn("restore embeddings", "err", err)
+		} else if restored > 0 {
+			logger.Info("restored embeddings",
+				"restored", restored, "snapshotted", len(snapshots))
+		}
+	}
+
+	if err := runEmbedderPass(*root, *dir, s, logger); err != nil {
+		// Never fail the index over an embedder issue — semantic search is
+		// opt-in and degrades to FTS-only when vectors are missing.
+		logger.Warn("embedder pass failed", "err", err)
+	}
+
 	if err := s.SetMeta("last_indexed", fmt.Sprintf("%d", time.Now().Unix())); err != nil {
 		logger.Warn("set meta failed", "err", err)
 	}
 
 	logger.Info("indexing complete")
+}
+
+// runEmbedderPass loads .scout/config.yaml from the project root and, if an
+// embedder is configured, vectorizes every symbol the store lists as
+// unembedded. No-op when the config file is absent or has no embedder block.
+func runEmbedderPass(rootFlag, dirFlag string, s *store.Store, logger *slog.Logger) error {
+	configRoot := rootFlag
+	if dirFlag != "" {
+		configRoot = dirFlag
+	}
+	cfg, err := config.Load(configRoot)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	if cfg.Embedder == nil {
+		return nil
+	}
+	if cfg.Embedder.Kind != config.EmbedderOllama {
+		return fmt.Errorf("unsupported embedder kind: %q", cfg.Embedder.Kind)
+	}
+
+	client := embedder.NewOllamaClient(cfg.Embedder.Host, cfg.Embedder.Model)
+	logger.Info("embedder pass starting",
+		"model", cfg.Embedder.Model, "host", cfg.Embedder.Host)
+	stats, err := embedder.Run(context.Background(), s, client, embedder.Options{
+		Logger: slogPrintfAdapter{logger},
+	})
+	if err != nil {
+		return err
+	}
+	logger.Info("embedder pass complete",
+		"considered", stats.Considered,
+		"embedded", stats.Embedded,
+		"failed", stats.Failed,
+	)
+	return nil
+}
+
+// slogPrintfAdapter lets the embedder package use whatever logger the CLI
+// already configured without forcing the package to depend on slog.
+type slogPrintfAdapter struct{ l *slog.Logger }
+
+func (a slogPrintfAdapter) Printf(format string, args ...any) {
+	a.l.Info(fmt.Sprintf(format, args...))
 }
 
 func cmdReindex(args []string) {
