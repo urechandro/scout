@@ -1,8 +1,10 @@
 # Meaning-based fixtures for the Phase 3 semantic-retrieval layer.
 #
-# These queries deliberately avoid the symbol names. The intent is to surface
-# code by *what it does* rather than what it's called — exactly the gap FTS
-# leaves and the vector layer is meant to close.
+# These queries are written to be **disjoint** from the target symbol's name,
+# signature, body, and docstring vocabulary. The point is to surface code by
+# what it *does* without naming any token an FTS lexer could match. This is
+# the gap Phase 3 is meant to close; if FTS hits these, the fixture is too
+# easy and should be rewritten.
 #
 # These tests are skipped by default. Set SCOUT_OLLAMA_HOST (e.g.
 # http://localhost:11434) and SCOUT_OLLAMA_MODEL (e.g. nomic-embed-text) to
@@ -12,7 +14,7 @@
 - name: semantic_finds_file_watcher
   tool: get_relevant_context
   args:
-    query: the component that re-runs the indexer when files on disk change
+    query: notices when source on disk is modified by a developer in their editor
   must_include:
     - github.com/urechandro/scout/indexer.Watcher
   max_bytes: 12000
@@ -20,31 +22,47 @@
 - name: semantic_finds_proto_link
   tool: get_relevant_context
   args:
-    query: the function that connects proto RPCs to their Go method implementations
+    query: wires up the promised side and the delivered side of a published interface
   must_include:
     - github.com/urechandro/scout/indexer.LinkProtoToGo
   max_bytes: 12000
 
-- name: semantic_finds_embedder_orchestrator
+- name: semantic_finds_query_classifier
   tool: get_relevant_context
   args:
-    query: the pass that turns symbols into vectors and writes them back
+    query: tells apart a single short token from a longer human sentence
   must_include:
-    - github.com/urechandro/scout/embedder
+    - github.com/urechandro/scout/query.classifyQuery
   max_bytes: 12000
 
-- name: semantic_finds_phase_three
+- name: semantic_finds_dirty_signal
   tool: get_relevant_context
   args:
-    query: the retrieval phase that uses cosine similarity over an in-memory slab
+    query: nudges a downstream reader that its lookup table is no longer fresh
   must_include:
-    - phaseThreeVectorSearch
+    - github.com/urechandro/scout/query.Engine.MarkVectorsDirty
   max_bytes: 12000
 
-- name: semantic_finds_budget_trimmer
+- name: semantic_finds_source_first
   tool: get_relevant_context
   args:
-    query: the function that greedily fills results up to a token budget
+    query: pushes hand-written work ahead of auto-produced boilerplate in the output list
   must_include:
-    - trimToBudget
+    - github.com/urechandro/scout/query.prioritizeSource
+  max_bytes: 12000
+
+- name: semantic_finds_log_bridge
+  tool: get_relevant_context
+  args:
+    query: lets one logging convention speak to a tool that expects a different one
+  must_include:
+    - github.com/urechandro/scout/cmd/scout.slogPrintfAdapter
+  max_bytes: 12000
+
+- name: semantic_finds_topk_picker
+  tool: get_relevant_context
+  args:
+    query: picks the most similar entries from a list of high-dimensional points
+  must_include:
+    - github.com/urechandro/scout/query.topKCosine
   max_bytes: 12000
