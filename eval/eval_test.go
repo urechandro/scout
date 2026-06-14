@@ -45,7 +45,7 @@ func setupIndex(t *testing.T) *query.Engine {
 			setupErr = err
 			return
 		}
-		setupEng = query.New(s)
+		setupEng = query.New(s, query.Options{})
 	})
 	if setupErr != nil {
 		t.Fatalf("index scout repo: %v", setupErr)

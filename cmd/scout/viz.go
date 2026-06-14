@@ -33,7 +33,7 @@ func cmdViz(args []string) {
 	}
 	defer s.Close()
 
-	engine := query.New(s)
+	engine := query.New(s, query.Options{})
 	result, err := engine.GetViz(*symbol, *direction, *depth)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "scout viz: %v\n", err)

@@ -1,0 +1,50 @@
+# Meaning-based fixtures for the Phase 3 semantic-retrieval layer.
+#
+# These queries deliberately avoid the symbol names. The intent is to surface
+# code by *what it does* rather than what it's called — exactly the gap FTS
+# leaves and the vector layer is meant to close.
+#
+# These tests are skipped by default. Set SCOUT_OLLAMA_HOST (e.g.
+# http://localhost:11434) and SCOUT_OLLAMA_MODEL (e.g. nomic-embed-text) to
+# run them. The runner needs a populated index with embeddings under the
+# configured model — `scout index` against scout's own checkout works.
+
+- name: semantic_finds_file_watcher
+  tool: get_relevant_context
+  args:
+    query: the component that re-runs the indexer when files on disk change
+  must_include:
+    - github.com/urechandro/scout/indexer.Watcher
+  max_bytes: 12000
+
+- name: semantic_finds_proto_link
+  tool: get_relevant_context
+  args:
+    query: the function that connects proto RPCs to their Go method implementations
+  must_include:
+    - github.com/urechandro/scout/indexer.LinkProtoToGo
+  max_bytes: 12000
+
+- name: semantic_finds_embedder_orchestrator
+  tool: get_relevant_context
+  args:
+    query: the pass that turns symbols into vectors and writes them back
+  must_include:
+    - github.com/urechandro/scout/embedder
+  max_bytes: 12000
+
+- name: semantic_finds_phase_three
+  tool: get_relevant_context
+  args:
+    query: the retrieval phase that uses cosine similarity over an in-memory slab
+  must_include:
+    - phaseThreeVectorSearch
+  max_bytes: 12000
+
+- name: semantic_finds_budget_trimmer
+  tool: get_relevant_context
+  args:
+    query: the function that greedily fills results up to a token budget
+  must_include:
+    - trimToBudget
+  max_bytes: 12000

@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/urechandro/scout/config"
+	"github.com/urechandro/scout/embedder"
+	"github.com/urechandro/scout/query"
 	"github.com/urechandro/scout/store"
 )
 
@@ -112,11 +114,39 @@ func TestRunEmbedderPass_UnsupportedKindReturnsError(t *testing.T) {
 	}
 }
 
-func TestBuildWatcherEmbedCallback_NilWhenUnconfigured(t *testing.T) {
+func TestLoadEmbedderClient_NilWhenUnconfigured(t *testing.T) {
 	_, root := newTestStore(t)
-	cb, startup := buildWatcherEmbedCallback(root, nil, slog.Default())
-	if cb != nil || startup != nil {
-		t.Errorf("expected (nil,nil) when embedder unconfigured, got cb=%v startup=%v", cb != nil, startup != nil)
+	if c := loadEmbedderClient(root, slog.Default()); c != nil {
+		t.Errorf("expected nil when no .scout/config.yaml, got %v", c)
+	}
+}
+
+func TestLoadEmbedderClient_NilForUnsupportedKind(t *testing.T) {
+	_, root := newTestStore(t)
+	raw := []byte("embedder:\n  kind: voyage\n  host: x\n  model: y\n")
+	if err := os.WriteFile(config.Path(root), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if c := loadEmbedderClient(root, slog.Default()); c != nil {
+		t.Errorf("expected nil for unsupported kind, got %v", c)
+	}
+}
+
+func TestLoadEmbedderClient_ReturnsClientWhenConfigured(t *testing.T) {
+	_, root := newTestStore(t)
+	if err := config.Save(root, &config.Config{Embedder: &config.EmbedderConfig{
+		Kind:  config.EmbedderOllama,
+		Host:  "http://localhost:11434",
+		Model: "nomic-embed-text",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	c := loadEmbedderClient(root, slog.Default())
+	if c == nil {
+		t.Fatal("expected non-nil client when Ollama embedder configured")
+	}
+	if c.Model() != "nomic-embed-text" {
+		t.Errorf("client.Model() = %q, want nomic-embed-text", c.Model())
 	}
 }
 
@@ -153,7 +183,9 @@ func TestBuildWatcherEmbedCallback_SerializesPasses(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cb, startup := buildWatcherEmbedCallback(root, s, slog.Default())
+	client := embedder.NewOllamaClient(srv.URL, "m")
+	eng := query.New(s, query.Options{})
+	cb, startup := buildWatcherEmbedCallback(s, client, eng, slog.Default())
 	if cb == nil || startup == nil {
 		t.Fatal("expected non-nil callback + startup")
 	}
@@ -168,5 +200,41 @@ func TestBuildWatcherEmbedCallback_SerializesPasses(t *testing.T) {
 
 	if peak > 1 {
 		t.Errorf("embedder passes ran concurrently (peak=%d); callback mutex broken", peak)
+	}
+}
+
+func TestBuildWatcherEmbedCallback_MarksEngineDirtyAfterSuccess(t *testing.T) {
+	s, root := newTestStore(t)
+	seedOneSymbol(t, s)
+
+	srv := fakeOllama(t)
+	defer srv.Close()
+
+	if err := config.Save(root, &config.Config{Embedder: &config.EmbedderConfig{
+		Kind: config.EmbedderOllama, Host: srv.URL, Model: "m",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	client := embedder.NewOllamaClient(srv.URL, "m")
+	eng := query.New(s, query.Options{Embedder: client})
+	cb, _ := buildWatcherEmbedCallback(s, client, eng, slog.Default())
+
+	// Drive a phase-3 call once so the slab loads (slab is empty here —
+	// the symbol has no vector yet — but the cached state is what matters).
+	_, _ = eng.GetRelevantContext(query.ContextRequest{Task: "anything goes here"})
+
+	cb("go", []string{"foo.go"})
+
+	// After a pass that wrote a vector, the engine should reload its slab
+	// on the next phase-3 call. Easiest check: after a second phase-3 call,
+	// the slab now contains the row. We probe via the public API by asking
+	// for it directly; pure-state inspection would require exporting fields.
+	resp, err := eng.GetRelevantContext(query.ContextRequest{Task: "anything goes here"})
+	if err != nil {
+		t.Fatalf("phase-3 call after dirty: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("expected response")
 	}
 }

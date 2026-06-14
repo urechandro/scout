@@ -95,22 +95,19 @@ the existing `symbols` table — no separate vector DB, no CGO dep. Off by
 default; enabled via the `scout init` prompt, persisted to `.scout/config.yaml`.
 
 **Status of the semantic layer:** schema, config, init prompt, indexer
-integration, embedding preservation across `ResetIndex`, and watcher-driven
-re-embedding are wired. `scout index` snapshots vectors before the reset and
-restores them after the reindex for symbols whose `name+signature+docstring`
-survived unchanged — so a full re-index only embeds new or text-changed
-symbols. `scout serve --watch` drains any embedding backlog in a background
-startup pass, then re-embeds invalidated symbols after each debounced Go /
-proto / TS reindex via a `WatcherConfig.PostReindex` callback. The query
-Phase 3 (in-memory vector slab + brute-force cosine, gated to discovery
-queries) is the remaining piece — design captured below.
+integration, embedding preservation across `ResetIndex`, watcher-driven
+re-embedding, and query-time vector retrieval are all wired.
+`scout index` snapshots vectors before the reset and restores them after the
+reindex for symbols whose `name+signature+docstring` survived unchanged — so
+a full re-index only embeds new or text-changed symbols. `scout serve
+--watch` drains any embedding backlog in a background startup pass, then
+re-embeds invalidated symbols after each debounced Go / proto / TS reindex
+via a `WatcherConfig.PostReindex` callback, which also calls
+`engine.MarkVectorsDirty` so the next semantic query reloads its slab.
 
-### Planned: query Phase 3 (semantic retrieval)
+### Query Phase 3 (semantic retrieval)
 
-> Design captured for context-clear handoff; not yet implemented. Subject to
-> revision once we have recall numbers to point at.
-
-**Where it lives.** `query/engine.go`. The two-phase pipeline becomes three:
+**Where it lives.** `query/engine.go`. The two-phase pipeline is now three:
 - Phase 1: exact name lookup (compound identifiers) — unchanged
 - Phase 2: FTS — discovery queries only — unchanged
 - Phase 3: vector cosine — discovery queries only — new
@@ -120,11 +117,12 @@ entirely.** They are deterministic by design; fuzzy semantic matches would
 add noise without value. An empty Phase 1 still means "this symbol doesn't
 exist."
 
-**Engine wiring.** `query.New(s)` becomes `query.New(s, opts)` where
-`opts.Embedder embedder.Client` is optional. Nil disables Phase 3
-silently — today's behavior. `cmd/scout/serve.go` constructs the client
-from `.scout/config.yaml` (same code path as the watcher's
-`buildWatcherEmbedCallback`) and passes it in.
+**Engine wiring.** `query.New(s, opts)` takes a `query.Options` struct with
+an optional `Embedder embedder.Client`. Nil disables Phase 3 silently —
+the pre-semantic behavior. `cmd/scout/serve.go` constructs the client once
+via `loadEmbedderClient` and passes it to both the query engine and the
+watcher's `buildWatcherEmbedCallback`, so the slab cache and the
+re-embedding pass share the same model configuration.
 
 **Vector slab.** On first Phase-3 invocation the engine calls
 `store.LoadEmbeddings(model)` and caches the result as a flat slab in
@@ -158,11 +156,13 @@ existing FTS/exact-match scoring scale:
   return FTS-only (signals a model change without a reindex)
 - Slab empty → skip Phase 3; queries succeed via FTS
 
-**Recall benchmark.** Add an eval fixture set in `eval/fixtures.yaml`
-where queries are *meaning-based*, not name-based — e.g. "the thing that
-retries failed deliveries". Run the suite twice: once with the embedder
-configured, once without, and compare must_include hit rate. This is the
-A/B that justifies the layer's existence.
+**Recall benchmark.** `eval/semantic_fixtures.yaml` holds meaning-based
+fixtures (e.g. "the component that re-runs the indexer when files on disk
+change"). `TestSemanticFixtures` runs them against an Ollama-backed engine
+when `SCOUT_OLLAMA_HOST` and `SCOUT_OLLAMA_MODEL` are set; otherwise the
+test is skipped so CI without Ollama stays green. The FTS-only baseline
+remains `eval/fixtures.yaml` + `TestGoldenFixtures`. Compare must_include
+hit rate across the two to measure the recall delta the layer provides.
 
 **Not in Phase 3 scope.** Vector quantization (8-bit packed BLOBs to cut
 slab size 4x). ANN index (HNSW, IVF). Hybrid score fusion algorithms
