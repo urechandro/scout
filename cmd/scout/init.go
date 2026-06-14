@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -16,9 +15,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/huh"
-
-	"github.com/urechandro/scout/config"
-	"github.com/urechandro/scout/embedder"
 )
 
 const scoutStart = "<!-- scout -->"
@@ -84,13 +80,6 @@ type wizardConfig struct {
 	IndexDeps           bool
 	EnableWatch         bool
 	ScaffoldConventions bool
-
-	// EnableSemantic indicates the user opted into the semantic-search
-	// retrieval layer at init time. When true the wizard writes an embedder
-	// block to .scout/config.yaml so subsequent index/serve runs pick it up.
-	EnableSemantic bool
-	OllamaHost     string
-	OllamaModel    string
 }
 
 type mcpServer struct {
@@ -177,11 +166,6 @@ func cmdInit(args []string) {
 		os.Exit(1)
 	}
 
-	if err := writeScoutConfig(absRoot, cfg, logger); err != nil {
-		logger.Error("write .scout/config.yaml", "err", err)
-		os.Exit(1)
-	}
-
 	if cfg.ScaffoldConventions {
 		if err := scaffoldConventions(absRoot, logger); err != nil {
 			logger.Warn("scaffold conventions.yaml", "err", err)
@@ -243,11 +227,6 @@ func buildInitDefaults(absRoot, dbFlag, tsconfigFlag, tsCommand, exclude string,
 		IndexDeps:           !skipIndex,
 		EnableWatch:         true,
 		ScaffoldConventions: !conventionsExist,
-
-		// Semantic search is off by default — opt-in via the wizard.
-		EnableSemantic: false,
-		OllamaHost:     config.DefaultOllamaHost,
-		OllamaModel:    config.DefaultOllamaModel,
 	}
 }
 
@@ -314,27 +293,7 @@ func runWizard(cfg *wizardConfig, conventionsExist bool) error {
 		return conventionsExist
 	})
 
-	groupSemantic := huh.NewGroup(
-		huh.NewConfirm().
-			Title("Enable semantic search (via Ollama)?").
-			Description("Adds vector-based retrieval to get_relevant_context for queries\nlike \"the thing that retries failed deliveries\". Requires a local\nOllama install. If declined, scout uses exact-name + FTS only (today's behavior).").
-			Value(&cfg.EnableSemantic),
-	)
-
-	groupSemanticDetails := huh.NewGroup(
-		huh.NewInput().
-			Title("Ollama host").
-			Description("Where Ollama is listening.").
-			Value(&cfg.OllamaHost),
-		huh.NewInput().
-			Title("Embedding model").
-			Description("Model tag Ollama should use. Default works on most setups (~274MB).").
-			Value(&cfg.OllamaModel),
-	).WithHideFunc(func() bool {
-		return !cfg.EnableSemantic
-	})
-
-	return huh.NewForm(groupProject, groupTS, groupBehavior, groupConventions, groupSemantic, groupSemanticDetails).
+	return huh.NewForm(groupProject, groupTS, groupBehavior, groupConventions).
 		WithTheme(huh.ThemeCharm()).
 		Run()
 }
@@ -351,11 +310,6 @@ func printInitSummary(cfg wizardConfig) {
 	fmt.Fprintf(os.Stderr, "  Watch:       %v\n", cfg.EnableWatch)
 	fmt.Fprintf(os.Stderr, "  Index now:   %v\n", cfg.IndexDeps)
 	fmt.Fprintf(os.Stderr, "  Conventions: %v\n", cfg.ScaffoldConventions)
-	if cfg.EnableSemantic {
-		fmt.Fprintf(os.Stderr, "  Semantic:    ollama %s @ %s\n", cfg.OllamaModel, cfg.OllamaHost)
-	} else {
-		fmt.Fprintf(os.Stderr, "  Semantic:    disabled\n")
-	}
 	fmt.Fprintln(os.Stderr)
 }
 
@@ -550,64 +504,6 @@ func updateCLAUDEMD(root string, logger interface{ Info(string, ...any) }) error
 	}
 
 	return os.WriteFile(claudePath, []byte(updated), 0o644)
-}
-
-// writeScoutConfig persists .scout/config.yaml based on wizard answers.
-// When semantic search is enabled, the function also probes Ollama and
-// prints actionable warnings if the server or model isn't ready — without
-// failing the init (the user can pull the model afterwards).
-func writeScoutConfig(root string, cfg wizardConfig, logger interface {
-	Info(string, ...any)
-	Warn(string, ...any)
-}) error {
-	if !cfg.EnableSemantic {
-		// Nothing user-configurable yet outside the embedder block — skip
-		// writing an empty file so init stays minimal for users who don't
-		// opt into the optional layer.
-		return nil
-	}
-	scoutCfg := &config.Config{
-		Embedder: &config.EmbedderConfig{
-			Kind:  config.EmbedderOllama,
-			Host:  strings.TrimSpace(cfg.OllamaHost),
-			Model: strings.TrimSpace(cfg.OllamaModel),
-		},
-	}
-	if err := config.Save(root, scoutCfg); err != nil {
-		return err
-	}
-	logger.Info("wrote .scout/config.yaml")
-
-	probeOllamaForInit(scoutCfg.Embedder, logger)
-	return nil
-}
-
-// probeOllamaForInit prints user-visible status about whether semantic search
-// is ready to go. Never fails — it's purely informational.
-func probeOllamaForInit(e *config.EmbedderConfig, logger interface {
-	Info(string, ...any)
-	Warn(string, ...any)
-}) {
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-	defer cancel()
-
-	res, err := embedder.ProbeOllama(ctx, e.Host, e.Model)
-	if err != nil {
-		logger.Warn("probe Ollama", "err", err)
-		return
-	}
-	switch {
-	case !res.Reachable:
-		logger.Warn("Ollama not reachable — start it before running scout index",
-			"host", e.Host,
-			"hint", "https://ollama.com/download")
-	case !res.ModelInstalled:
-		logger.Warn("embedding model not installed — pull it before indexing",
-			"model", e.Model,
-			"hint", fmt.Sprintf("ollama pull %s", e.Model))
-	default:
-		logger.Info("Ollama ready", "model", e.Model)
-	}
 }
 
 func scaffoldConventions(root string, logger interface{ Info(string, ...any) }) error {

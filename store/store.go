@@ -82,18 +82,16 @@ func (s *Store) migrate() error {
 	}
 	_, err := s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS symbols (
-			id              TEXT PRIMARY KEY,
-			package         TEXT NOT NULL,
-			name            TEXT NOT NULL,
-			kind            TEXT NOT NULL,
-			signature       TEXT NOT NULL,
-			docstring       TEXT NOT NULL DEFAULT '',
-			file            TEXT NOT NULL,
-			line_start      INTEGER NOT NULL,
-			line_end        INTEGER NOT NULL,
-			body            TEXT NOT NULL DEFAULT '',
-			embedding       BLOB,
-			embedding_model TEXT NOT NULL DEFAULT ''
+			id         TEXT PRIMARY KEY,
+			package    TEXT NOT NULL,
+			name       TEXT NOT NULL,
+			kind       TEXT NOT NULL,
+			signature  TEXT NOT NULL,
+			docstring  TEXT NOT NULL DEFAULT '',
+			file       TEXT NOT NULL,
+			line_start INTEGER NOT NULL,
+			line_end   INTEGER NOT NULL,
+			body       TEXT NOT NULL DEFAULT ''
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_symbols_package ON symbols(package);
@@ -140,53 +138,10 @@ func (s *Store) migrate() error {
 		return fmt.Errorf("create tables: %w", err)
 	}
 
-	// Backfill columns added after the initial schema. Safe for both fresh
-	// and existing DBs: addColumnIfMissing is a no-op when the column exists.
-	if err := s.addColumnIfMissing("symbols", "embedding", "BLOB"); err != nil {
-		return err
-	}
-	if err := s.addColumnIfMissing("symbols", "embedding_model", "TEXT NOT NULL DEFAULT ''"); err != nil {
-		return err
-	}
-	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_symbols_embedding_model ON symbols(embedding_model)`); err != nil {
-		return fmt.Errorf("create idx_symbols_embedding_model: %w", err)
-	}
-
 	return nil
 }
 
-// addColumnIfMissing runs `ALTER TABLE ... ADD COLUMN` only if the column is
-// absent. SQLite has no `ADD COLUMN IF NOT EXISTS`, so we inspect PRAGMA.
-func (s *Store) addColumnIfMissing(table, column, definition string) error {
-	rows, err := s.db.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))
-	if err != nil {
-		return fmt.Errorf("pragma table_info(%s): %w", table, err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var cid int
-		var name, ctype string
-		var notnull, pk int
-		var dflt sql.NullString
-		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
-			return fmt.Errorf("scan table_info: %w", err)
-		}
-		if name == column {
-			return nil
-		}
-	}
-	if _, err := s.db.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, table, column, definition)); err != nil {
-		return fmt.Errorf("add column %s.%s: %w", table, column, err)
-	}
-	return nil
-}
-
-// UpsertSymbol inserts or replaces a symbol. The embedding columns are
-// deliberately not in the INSERT list — they are written separately via
-// UpsertEmbedding, and on UPDATE we preserve them only when the text the
-// vector was derived from (name, signature, docstring) is unchanged.
-// Otherwise the vector is invalidated by clearing it to NULL so the next
-// indexer pass picks it up via ListUnembedded.
+// UpsertSymbol inserts or replaces a symbol.
 func (s *Store) UpsertSymbol(sym Symbol) error {
 	_, err := s.db.Exec(`
 		INSERT INTO symbols (id, package, name, kind, signature, docstring, file, line_start, line_end, body)
@@ -197,21 +152,7 @@ func (s *Store) UpsertSymbol(sym Symbol) error {
 			file       = excluded.file,
 			line_start = excluded.line_start,
 			line_end   = excluded.line_end,
-			body       = excluded.body,
-			embedding  = CASE
-				WHEN symbols.name = excluded.name
-				 AND symbols.signature = excluded.signature
-				 AND symbols.docstring = excluded.docstring
-				THEN symbols.embedding
-				ELSE NULL
-			END,
-			embedding_model = CASE
-				WHEN symbols.name = excluded.name
-				 AND symbols.signature = excluded.signature
-				 AND symbols.docstring = excluded.docstring
-				THEN symbols.embedding_model
-				ELSE ''
-			END
+			body       = excluded.body
 	`,
 		sym.ID, sym.Package, sym.Name, sym.Kind,
 		sym.Signature, sym.Docstring, sym.File,

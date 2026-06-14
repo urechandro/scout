@@ -24,46 +24,11 @@ scout init
 - Generates `.mcp.json` wired to `scout serve`
 - Appends a `<!-- scout -->` navigation block to `CLAUDE.md`
 - Optionally scaffolds `conventions.yaml`
-- Optionally enables semantic search via [Ollama](https://ollama.com/) — see below
 - Runs a full index
 
 Then reload Claude Code to pick up the MCP server.
 
-Pass `--yes` / `-y` to skip the TUI and accept all defaults (CI-safe, semantic search off).
-
-### Semantic search (optional)
-
-If you say yes to the semantic-search prompt, `scout init` writes an
-`embedder` block to `.scout/config.yaml`:
-
-```yaml
-embedder:
-  kind: ollama
-  host: http://localhost:11434
-  model: nomic-embed-text
-```
-
-You'll need Ollama running locally and the model pulled:
-
-```sh
-ollama pull nomic-embed-text
-```
-
-When the embedder is configured, `scout index` runs an extra pass that
-batches every unembedded symbol through Ollama and stores the resulting
-vectors. The pass is fault-tolerant: a failing batch is logged and skipped,
-not retried, so a misbehaving Ollama never fails the index. Editing a
-symbol's signature or docstring invalidates its vector — the next index
-run re-embeds only the changed symbols. Full reindexes preserve vectors
-for unchanged symbols across the reset, so re-running `scout index` doesn't
-re-embed the whole corpus. `scout serve --watch` also re-embeds invalidated
-symbols after each debounced reindex.
-
-> **Status:** schema, config, init prompt, indexer integration, and
-> watcher-driven re-embedding are wired. The query phase that actually
-> consults vectors at retrieval time lands in the next change. Until then,
-> embeddings are populated but `get_relevant_context` still uses exact-name
-> + FTS only.
+Pass `--yes` / `-y` to skip the TUI and accept all defaults (CI-safe).
 
 ## Commands
 

@@ -33,8 +33,7 @@ your codebase (.go + .proto + .ts/.tsx files)
     indexer + protoindexer + tsindexer
         ↓  upsert
     store (SQLite)
-      ├── symbols table (id, kind, signature, docstring, file, lines, body,
-      │                  embedding BLOB, embedding_model TEXT)
+      ├── symbols table (id, kind, signature, docstring, file, lines, body)
       ├── symbols_fts (FTS5 virtual table for text search)
       ├── edges table (from_id, to_id, kind: calls/implements/uses_type)
       └── conventions table (from conventions.yaml)
@@ -85,89 +84,10 @@ FTS with OR semantics returns too many results for broad terms like "service"
 or "shipment", drowning the relevant symbols. Exact lookup scores 3.0 vs FTS
 position-based ~0-1.0.
 
-**FTS5 plus optional semantic layer.** SQLite FTS5 handles "find rate limiting",
+**FTS5 only, no vector store.** SQLite FTS5 handles "find rate limiting",
 "find auth middleware" well enough for a codebase where you know the naming
-conventions. For cases where the model knows what a thing does but not its name
-("the thing that retries failed deliveries"), an opt-in semantic retrieval layer
-is being added behind `get_relevant_context`. Vectors are produced by a
-locally-running Ollama server (no API keys, no network) and stored as BLOBs on
-the existing `symbols` table — no separate vector DB, no CGO dep. Off by
-default; enabled via the `scout init` prompt, persisted to `.scout/config.yaml`.
-
-**Status of the semantic layer:** schema, config, init prompt, indexer
-integration, embedding preservation across `ResetIndex`, and watcher-driven
-re-embedding are wired. `scout index` snapshots vectors before the reset and
-restores them after the reindex for symbols whose `name+signature+docstring`
-survived unchanged — so a full re-index only embeds new or text-changed
-symbols. `scout serve --watch` drains any embedding backlog in a background
-startup pass, then re-embeds invalidated symbols after each debounced Go /
-proto / TS reindex via a `WatcherConfig.PostReindex` callback. The query
-Phase 3 (in-memory vector slab + brute-force cosine, gated to discovery
-queries) is the remaining piece — design captured below.
-
-### Planned: query Phase 3 (semantic retrieval)
-
-> Design captured for context-clear handoff; not yet implemented. Subject to
-> revision once we have recall numbers to point at.
-
-**Where it lives.** `query/engine.go`. The two-phase pipeline becomes three:
-- Phase 1: exact name lookup (compound identifiers) — unchanged
-- Phase 2: FTS — discovery queries only — unchanged
-- Phase 3: vector cosine — discovery queries only — new
-
-Precise queries (single compound/dotted identifier) **skip Phase 3
-entirely.** They are deterministic by design; fuzzy semantic matches would
-add noise without value. An empty Phase 1 still means "this symbol doesn't
-exist."
-
-**Engine wiring.** `query.New(s)` becomes `query.New(s, opts)` where
-`opts.Embedder embedder.Client` is optional. Nil disables Phase 3
-silently — today's behavior. `cmd/scout/serve.go` constructs the client
-from `.scout/config.yaml` (same code path as the watcher's
-`buildWatcherEmbedCallback`) and passes it in.
-
-**Vector slab.** On first Phase-3 invocation the engine calls
-`store.LoadEmbeddings(model)` and caches the result as a flat slab in
-memory. ~14k symbols × 768 dims × 4 bytes = ~42MB. Brute-force cosine
-over the slab is ~50ms — fast enough for interactive queries, no need
-for an ANN index until the corpus crosses ~100k symbols.
-
-**Slab invalidation.** The watcher's `PostReindex` callback signals the
-engine that vectors changed (via a setter on the engine, or a shared
-`*atomic.Bool` "dirty" flag). Next Phase-3 call reloads the slab before
-scoring. Concurrency: the watcher's callback already serializes embedder
-passes, so the slab is reloaded at most once per debounced reindex.
-
-**Per-query embedding.** Each discovery query incurs one HTTP round-trip
-to Ollama (~50–200ms on a laptop) to embed the query string. The result
-is **not** cached across queries — the eval corpus is small enough that
-hit rate would be low, and an LRU adds complexity. Revisit if profiles
-show this dominating latency.
-
-**Scoring integration.** Cosine similarity sits in [-1, 1]. Mapped to the
-existing FTS/exact-match scoring scale:
-- `vectorScore = cosine × 1.5` (puts top hits near FTS's ~1.0 range)
-- Then the existing `kindWeight`, `implBoost`, `generatedPenalty` apply
-- Top-K cap (heap-based, K = ~30) keeps the scoring pool manageable
-- Existing `dedup()` and `prioritizeSource` passes apply unchanged
-
-**Failure modes — all silent skips, never error.**
-- No embedder configured → Phase 3 doesn't run (today's behavior)
-- Embedder unreachable at query time → log once, return FTS-only results
-- Stored vector dim ≠ query embedding dim → log once, skip the slab,
-  return FTS-only (signals a model change without a reindex)
-- Slab empty → skip Phase 3; queries succeed via FTS
-
-**Recall benchmark.** Add an eval fixture set in `eval/fixtures.yaml`
-where queries are *meaning-based*, not name-based — e.g. "the thing that
-retries failed deliveries". Run the suite twice: once with the embedder
-configured, once without, and compare must_include hit rate. This is the
-A/B that justifies the layer's existence.
-
-**Not in Phase 3 scope.** Vector quantization (8-bit packed BLOBs to cut
-slab size 4x). ANN index (HNSW, IVF). Hybrid score fusion algorithms
-(RRF, weighted ranking). These are layers we add later if recall is
-worth the complexity.
+conventions. Vector search (LanceDB) can be added later as a second layer for
+semantic gap cases — the query engine is designed with this seam in mind.
 
 **CLAUDE.md is required for tool adoption.** Claude Code does not auto-inject
 MCP `prompts/get` results, and tool descriptions alone are not enough to make
@@ -220,17 +140,11 @@ scout/
 │   └── indexer.go          — Shells out to ts-callgraph, parses JSON output,
 │                             writes TypeScript symbols and edges to store
 ├── store/
-│   ├── store.go            — SQLite schema + CRUD: symbols, FTS, edges
-│   └── embeddings.go       — Vector BLOB codec + per-model upsert/load/list
+│   └── store.go            — SQLite schema + CRUD: symbols, FTS, edges
 ├── query/
 │   └── engine.go           — FTS search, graph expansion, ranking, trimming
 ├── mcp/
 │   └── server.go           — JSON-RPC 2.0 over stdio, MCP protocol
-├── config/
-│   └── config.go           — Read/write .scout/config.yaml (embedder block)
-├── embedder/
-│   ├── ollama.go           — Ollama client: probe + /api/embed batch call
-│   └── run.go              — Orchestration: list unembedded, batch, write back
 ├── scripts/
 │   └── pre-commit          — Git hook for incremental reindex on commit
 ├── .mcp.json               — Wires MCP server into Claude Code
@@ -322,77 +236,10 @@ scout/
 - `conventions` table: populated from conventions.yaml by the indexer
 - Body field stores a line reference `/* file.go:42-67 */` not full source,
   keeping the index small. Full source read from disk via `get_body`.
-- `embedding` BLOB + `embedding_model` TEXT columns hold the optional
-  per-symbol vector. Nullable: rows without a vector are simply skipped at
-  query time. `migrate()` adds them in place on existing DBs via a tolerant
-  `addColumnIfMissing` helper (SQLite has no `ADD COLUMN IF NOT EXISTS`).
 - `GetByName`, `GetByNameAndKind`: exact name lookups used by Phase 1 retrieval
 - `SearchFTSByKinds`: kind-filtered FTS queries (used by get_pattern to search
   RPCs directly instead of getting mixed results)
 - `FuzzyGetSymbol`: suffix + name matching for partial/guessed symbol IDs
-
-### store/embeddings.go
-- `EncodeEmbedding` / `DecodeEmbedding`: little-endian float32 pack/unpack
-  for the BLOB column. No header — length derived from `len(blob)/4`.
-- `UpsertEmbedding(id, model, vec)`: writes vector + source model. Does not
-  create the symbol row; callers must `UpsertSymbol` first.
-- `LoadEmbeddings(model)`: returns every `(id, vector)` for the named model.
-  The query engine loads this once into an in-memory slab and brute-forces
-  cosine against it; 14k × 768-dim × 4 bytes = ~43MB resident, ~50ms scan.
-- `ListUnembedded(model, limit)`: symbols whose stored embedding is missing
-  or was produced by a different model. The indexer uses this to backfill
-  vectors incrementally instead of re-embedding the whole corpus on every
-  model change.
-- `CountEmbeddings(model)`: status counter for tests and CLI output.
-- Model-name filter on every query is deliberate: it prevents accidentally
-  comparing vectors across embedding model versions, which would silently
-  return garbage relevance scores.
-
-### config/config.go
-- Owns `.scout/config.yaml`. Schema is a single optional `Embedder` block
-  (`kind`, `host`, `model`). All fields have `omitempty` so the file can
-  grow without breaking older binaries.
-- `Load(rootDir)` returns a zero Config when the file is absent — callers
-  do not need to special-case "no embedder configured".
-- `Save(rootDir, cfg)` creates `.scout/` if needed and writes atomically
-  enough for this use case (single-process init).
-- `Validate()` rejects unknown `kind` values and missing fields. Called from
-  both Load and Save so a hand-edited file is caught at open time.
-- `DefaultOllamaConfig()` is the recommended starter (`nomic-embed-text`
-  via `http://localhost:11434`), used by the `scout init` wizard.
-
-### embedder/ollama.go
-- Exposes a `Client` interface (`Embed`, `Model`) the orchestrator and (later)
-  the query engine call into. Tiny on purpose so a second backend slots in
-  without touching callers.
-- `OllamaClient.Embed` POSTs to `/api/embed` with `{"model": ..., "input":
-  [...]}` and returns vectors in input order. Validates that the response
-  vector count matches the input count — Ollama has been known to silently
-  truncate on overflow, which would silently corrupt the index.
-- `ProbeOllama` is a standalone helper (not on the client) because it runs
-  during `scout init` before any client is configured. Probe hits `/api/tags`
-  with a 3s timeout, treats transport errors as `Reachable=false` rather
-  than returning an error.
-- `matchesModel` matches a bare model name (`nomic-embed-text`) against
-  Ollama's tagged names (`nomic-embed-text:latest`). Users configure the
-  bare form; Ollama always reports the tagged form.
-
-### embedder/run.go
-- `Run(ctx, store, client, opts)` is the embedder pass invoked by
-  `scout index`. Loads `store.ListUnembedded(model)`, batches by
-  `Options.BatchSize` (default 32), pushes each batch through the client,
-  writes vectors back via `store.UpsertEmbedding`.
-- **Per-batch fault tolerance:** an embedder error logs and skips the batch,
-  bumping `Stats.Failed`, but the pass continues. Rationale: with 14k symbols
-  and a flaky network, an all-or-nothing pass would leave a corpus with zero
-  vectors. Skipped rows stay unembedded, so the next `scout index` retries
-  them automatically.
-- `EmbeddingText(sym)` produces the string fed to the embedder: signature
-  (always) + `\n` + docstring (when present). Body is deliberately excluded
-  — bodies churn far more often than signatures, and including them would
-  burn embedder budget on no-op re-embeds plus noise up the vector space.
-- `Options.Limit` caps the pass for callers that want to amortize cost
-  (e.g. a watcher embedding only recent changes — not wired yet).
 
 ### query/engine.go
 - **Query type detection** (`classifyQuery`): classifies queries upfront as
@@ -506,8 +353,7 @@ go install github.com/urechandro/scout/cmd/scout@latest
 ### Bootstrap a new project
 ```sh
 # Interactive TUI wizard: sets up .scout/, .mcp.json, CLAUDE.md block,
-# optional conventions.yaml, optional semantic search (Ollama), then
-# runs a full index.
+# optional conventions.yaml, then runs a full index.
 scout init
 ```
 
@@ -518,32 +364,11 @@ Flags (all optional — TUI prompts for them interactively):
 - `--ts-command` — ts-callgraph binary (default: `ts-callgraph`)
 - `--exclude` — comma-separated package substrings to skip
 - `--skip-index` — write config files only, skip the indexer
-- `--yes` / `-y` — non-interactive, accept all defaults (CI-safe; semantic
-  search stays off in this mode — opting in requires the TUI)
+- `--yes` / `-y` — non-interactive, accept all defaults (CI-safe)
 
 Re-running `scout init` is safe: it merges `.mcp.json`, replaces the
-`<!-- scout -->` block in CLAUDE.md idempotently, skips `conventions.yaml`
-if it already exists, and overwrites `.scout/config.yaml` with the latest
-wizard answers.
-
-### Optional: semantic search
-
-The wizard's final prompt asks whether to enable semantic search via Ollama.
-Saying yes writes an `embedder` block to `.scout/config.yaml`:
-
-```yaml
-embedder:
-  kind: ollama
-  host: http://localhost:11434
-  model: nomic-embed-text
-```
-
-The wizard then probes `<host>/api/tags` and prints a warning if Ollama is
-not running or the model is not pulled. Init does not fail on a bad probe —
-the user can `ollama pull nomic-embed-text` afterwards.
-
-Saying no writes no `embedder` block; scout queries continue using
-exact-name + FTS only.
+`<!-- scout -->` block in CLAUDE.md idempotently, and skips `conventions.yaml`
+if it already exists.
 
 ### Full index
 ```sh
