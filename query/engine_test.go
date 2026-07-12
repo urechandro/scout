@@ -281,7 +281,7 @@ func TestBuildFTSQuery(t *testing.T) {
 		{"find the auth middleware", "find OR auth OR middleware"},
 		{"CreateShipmentLeg", "createshipmentleg"},
 		{"how do I add pagination", "pagination"},
-		{"a the to", "a the to"}, // all stop words → falls through to raw
+		{"a the to", ""}, // all stop words → empty; raw text would be an FTS5 syntax error
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -1589,5 +1589,35 @@ func TestIsLineRef(t *testing.T) {
 				t.Errorf("isLineRef(%q) = %v, want %v", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+// --- Empty / stop-word-only queries must not reach FTS5 ---
+
+func TestGetConventions_EmptyTopic_FriendlyError(t *testing.T) {
+	s := newTestStore(t)
+	e := New(s, Options{})
+
+	for _, topic := range []string{"", "the of a"} {
+		_, err := e.GetConventions(topic)
+		if err == nil {
+			t.Fatalf("GetConventions(%q) should error", topic)
+		}
+		if strings.Contains(err.Error(), "fts5") || strings.Contains(err.Error(), "SQL logic error") {
+			t.Errorf("GetConventions(%q) leaked a raw FTS error: %v", topic, err)
+		}
+	}
+}
+
+func TestGetRelevantContext_StopWordsOnly_NoError(t *testing.T) {
+	s := newTestStore(t)
+	e := New(s, Options{})
+
+	resp, err := e.GetRelevantContext(ContextRequest{Task: "how does the work"})
+	if err != nil {
+		t.Fatalf("stop-word-only discovery query should not error: %v", err)
+	}
+	if len(resp.Symbols) != 0 {
+		t.Errorf("expected empty result, got %d symbols", len(resp.Symbols))
 	}
 }
