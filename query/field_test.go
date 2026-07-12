@@ -1,6 +1,7 @@
 package query
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/urechandro/scout/store"
@@ -169,6 +170,74 @@ func TestDiscovery_FieldsRankBelowBehavior(t *testing.T) {
 			ids[i] = s.Kind + ":" + s.ID
 		}
 		t.Errorf("field ranked above behavior symbols: %v", ids)
+	}
+}
+
+// TestDiscovery_SnakeCaseFieldName reproduces the live Sonnet failure of
+// 2026-07-12: three rephrasings of a field-name query returned zero field
+// symbols because snake_case never qualified as an identifier — no Phase-1
+// exact lookup, and FTS tokenization splits on "_" so the name bonus can't
+// fire. Each of the three query shapes must now surface the field.
+func TestDiscovery_SnakeCaseFieldName(t *testing.T) {
+	s := newTestStore(t)
+	seedFieldCorpus(t, s)
+	// Two more messages carrying a same-named field, mirroring the live
+	// index (Activity + two request messages all have reported_start_time).
+	// The name-dedup pass keeps one of a 3+ group, so cross-term affinity
+	// must make sure it keeps the one the query names.
+	seedSymbols(t, s, []store.Symbol{
+		{
+			ID: "planning.v1.Visit.pickup_time", Kind: "field",
+			Package: "planning.v1", Name: "pickup_time",
+			Signature: "google.protobuf.Timestamp pickup_time = 4",
+			File:      "/p/proto/visit.proto", LineStart: 14, LineEnd: 14,
+		},
+		{
+			ID: "planning.v1.AdjustShipmentLegTimesRequest.pickup_time", Kind: "field",
+			Package: "planning.v1", Name: "pickup_time",
+			Signature: "google.protobuf.Timestamp pickup_time = 3",
+			File:      "/p/proto/leg_service.proto", LineStart: 40, LineEnd: 40,
+		},
+	})
+	e := New(s, Options{})
+
+	for _, q := range []string{
+		"ShipmentLeg pickup_time",             // message + field (discovery)
+		"ShipmentLeg.pickup_time proto field", // dotted (discovery w/ extra words)
+	} {
+		resp, err := e.GetRelevantContext(ContextRequest{Task: q})
+		if err != nil {
+			t.Fatalf("GetRelevantContext(%q): %v", q, err)
+		}
+		found := false
+		for _, sym := range resp.Symbols {
+			if sym.ID == "planning.v1.ShipmentLeg.pickup_time" {
+				found = true
+			}
+		}
+		if !found {
+			ids := make([]string, len(resp.Symbols))
+			for i, sym := range resp.Symbols {
+				ids[i] = sym.ID
+			}
+			t.Errorf("query %q should surface the field; got %v", q, ids)
+		}
+	}
+
+	// A bare field name can't disambiguate between the three carriers, but
+	// it must surface at least one of them (pre-fix it surfaced none).
+	resp, err := e.GetRelevantContext(ContextRequest{Task: "pickup_time"})
+	if err != nil {
+		t.Fatalf("GetRelevantContext(bare): %v", err)
+	}
+	anyField := false
+	for _, sym := range resp.Symbols {
+		if sym.Kind == "field" && strings.HasSuffix(sym.ID, ".pickup_time") {
+			anyField = true
+		}
+	}
+	if !anyField {
+		t.Error("bare field name should surface at least one pickup_time field")
 	}
 }
 
