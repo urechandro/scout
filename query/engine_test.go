@@ -48,6 +48,10 @@ func TestClassifyQuery(t *testing.T) {
 		{"codes.NotFound", queryPrecise},
 		{"resourcename.Sprint", queryPrecise},
 
+		// Precise: snake_case identifiers (proto fields, DB columns)
+		{"reported_start_time", queryPrecise},
+		{"Activity.reported_start_time", queryPrecise},
+
 		// Discovery: multi-word natural language
 		{"how does auth work", queryDiscovery},
 		{"find rate limiting", queryDiscovery},
@@ -84,14 +88,18 @@ func TestIsCompoundIdent(t *testing.T) {
 		{"CreateShipmentLeg", true},
 		{"buildCallGraph", true},
 		{"getBody", true},
-		{"ID", false},       // too short transition-wise
-		{"abc", false},      // all lowercase
-		{"ABC", false},      // all uppercase
-		{"ab", false},       // too short
-		{"A", false},        // too short
-		{"parseRPC", true},  // lowercase→uppercase transition
-		{"FTS", false},      // all caps, no transition
-		{"FTSQuery", false}, // no lowercase→uppercase transition (uppercase→uppercase)
+		{"ID", false},                 // too short transition-wise
+		{"abc", false},                // all lowercase
+		{"ABC", false},                // all uppercase
+		{"ab", false},                 // too short
+		{"A", false},                  // too short
+		{"parseRPC", true},            // lowercase→uppercase transition
+		{"FTS", false},                // all caps, no transition
+		{"FTSQuery", false},           // no lowercase→uppercase transition (uppercase→uppercase)
+		{"pickup_time", true},         // snake_case identifier
+		{"reported_start_time", true}, // snake_case identifier
+		{"_x_", false},                // underscore without alnum on both sides
+		{"a_b", true},                 // minimal snake_case
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {

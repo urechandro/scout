@@ -198,6 +198,12 @@ func (e *Engine) GetRelevantContext(req ContextRequest) (*ContextResponse, error
 		}
 		for _, sym := range syms {
 			score := 3.0 + kindWeight(sym) + implBoost(sym) + generatedPenalty(sym)
+			// Cross-term affinity: "Activity reported_start_time" names two
+			// identifiers, and three messages carry a reported_start_time
+			// field — the hit whose ID also contains the *other* identifier
+			// is the one the query meant. Segment-exact so "Activity" does
+			// not match "AdjustActivityReportedTimesRequest".
+			score += crossTermAffinity(sym.ID, compounds, name)
 			s := toSummary(sym, score, "exact name match")
 			scored[sym.ID] = &s
 		}
@@ -2582,11 +2588,14 @@ func extractCompoundIdents(task string) []string {
 			seen[w] = true
 			idents = append(idents, w)
 		}
-		// Dotted identifiers like "grpc.Dial" or "status.Error": extract
-		// the name part after the last dot for exact name lookup.
+		// Dotted identifiers like "grpc.Dial" or "Activity.reported_start_time":
+		// extract the name part after the last dot for exact name lookup.
+		// Uppercase names are Go symbols; snake_case names are proto fields.
 		if dot := strings.LastIndex(w, "."); dot >= 0 && dot < len(w)-1 {
 			name := w[dot+1:]
-			if len(name) >= 2 && name[0] >= 'A' && name[0] <= 'Z' && !seen[name] {
+			isGoName := name[0] >= 'A' && name[0] <= 'Z'
+			isFieldName := strings.Contains(name, "_")
+			if len(name) >= 2 && (isGoName || isFieldName) && !seen[name] {
 				seen[name] = true
 				idents = append(idents, name)
 			}
@@ -2615,11 +2624,60 @@ func extractCompoundParts(task string) []string {
 	return parts
 }
 
-// isCompoundIdent reports whether s looks like a PascalCase or camelCase
-// identifier with at least two words (e.g. "CreateShipmentLeg", "buildCallGraph").
+// crossTermAffinity returns a bonus for each query identifier (other than
+// the one that produced the hit) that appears in the symbol's ID — as an
+// exact dot/slash-separated segment, or as a substring for dotted terms
+// like "Activity.reported_start_time".
+func crossTermAffinity(id string, terms []string, selfName string) float64 {
+	bonus := 0.0
+	idLower := strings.ToLower(id)
+	for _, t := range terms {
+		if strings.EqualFold(t, selfName) {
+			continue
+		}
+		tl := strings.ToLower(t)
+		if strings.Contains(tl, ".") {
+			if strings.Contains(idLower, tl) {
+				bonus += 0.75
+			}
+			continue
+		}
+		if idHasSegment(idLower, tl) {
+			bonus += 0.75
+		}
+	}
+	return bonus
+}
+
+// idHasSegment reports whether any dot- or slash-separated segment of the
+// (lowercased) symbol ID equals the (lowercased) term exactly.
+func idHasSegment(idLower, termLower string) bool {
+	start := 0
+	for i := 0; i <= len(idLower); i++ {
+		if i == len(idLower) || idLower[i] == '.' || idLower[i] == '/' {
+			if idLower[start:i] == termLower {
+				return true
+			}
+			start = i + 1
+		}
+	}
+	return false
+}
+
+// isCompoundIdent reports whether s looks like a multi-word identifier:
+// PascalCase/camelCase ("CreateShipmentLeg", "buildCallGraph") or snake_case
+// ("reported_start_time" — proto fields, DB columns). Without the snake_case
+// arm, field names fell through every retrieval path: no Phase-1 exact
+// lookup, and FTS tokenization splits on "_" so the exact-name bonus never
+// fires either.
 func isCompoundIdent(s string) bool {
 	if len(s) < 3 {
 		return false
+	}
+	for i := 1; i < len(s)-1; i++ {
+		if s[i] == '_' && isAlnumByte(s[i-1]) && isAlnumByte(s[i+1]) {
+			return true
+		}
 	}
 	transitions := 0
 	for i := 1; i < len(s); i++ {
@@ -2628,4 +2686,8 @@ func isCompoundIdent(s string) bool {
 		}
 	}
 	return transitions > 0
+}
+
+func isAlnumByte(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
 }
