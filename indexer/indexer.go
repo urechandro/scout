@@ -93,6 +93,14 @@ func (idx *Indexer) Run() error {
 	}
 
 	for _, pkg := range indexable {
+		// Clear this package's implements edges before re-adding. Interface
+		// satisfaction is computed fresh each pass, and a type that stopped
+		// implementing an interface leaves both symbols intact — file-level
+		// deletes never remove the stale edge. Same fix as the "calls" edge
+		// clearing in buildCallGraph.
+		if err := idx.store.DeleteEdgesByKindFromPackage("implements", pkg.PkgPath); err != nil {
+			return fmt.Errorf("clear implements edges for %s: %w", pkg.PkgPath, err)
+		}
 		if err := idx.indexPackage(pkg); err != nil {
 			return fmt.Errorf("index package %s: %w", pkg.PkgPath, err)
 		}
@@ -162,6 +170,16 @@ func (idx *Indexer) RunFiles(files []string) error {
 					return fmt.Errorf("delete stale symbols for %s: %w", f, err)
 				}
 			}
+		}
+
+		// Implements edges are cross-file within the package: removing a
+		// method in the changed file can un-implement an interface for a
+		// type declared elsewhere, and DeleteByFile won't touch that edge.
+		// Clear the package's implements edges; indexPackage re-adds the
+		// ones that still hold. (Proto→Go rpc links from this package are
+		// cleared too — callers re-run LinkProtoToGo after RunFiles.)
+		if err := idx.store.DeleteEdgesByKindFromPackage("implements", pkg.PkgPath); err != nil {
+			return fmt.Errorf("clear implements edges for %s: %w", pkg.PkgPath, err)
 		}
 
 		if err := idx.indexPackage(pkg); err != nil {
