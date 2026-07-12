@@ -14,6 +14,15 @@ import (
 // implementation packages). Individual edge upsert failures are logged but
 // do not fail the call. Returns the number of edges linked.
 func LinkProtoToGo(s *store.Store) (int, error) {
+	// Rebuild, don't accumulate: clear every rpc-targeted implements edge
+	// first. All RPCs are relinked below, so anything not re-added was
+	// stale (e.g. the preferred impl moved to a svc package — the old
+	// edge's endpoints both still exist, so file-level deletes never
+	// cascade it away).
+	if err := s.DeleteEdgesToSymbolKind("implements", "rpc"); err != nil {
+		return 0, fmt.Errorf("clear stale rpc links: %w", err)
+	}
+
 	rpcs, err := s.GetByKind("rpc")
 	if err != nil {
 		return 0, fmt.Errorf("get rpcs: %w", err)

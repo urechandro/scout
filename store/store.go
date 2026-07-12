@@ -318,6 +318,34 @@ func (s *Store) DeleteEdgesByKindAndPackages(kind string, pkgPaths []string) err
 	return tx.Commit()
 }
 
+// DeleteEdgesToSymbolKind removes edges of edgeKind whose target is a symbol
+// of symKind. LinkProtoToGo uses this to rebuild rpc-targeted implements
+// edges from scratch — upsert-only relinking left a stale edge behind
+// whenever the preferred Go implementation for an RPC changed.
+func (s *Store) DeleteEdgesToSymbolKind(edgeKind, symKind string) error {
+	_, err := s.db.Exec(
+		`DELETE FROM edges WHERE kind = ? AND to_id IN (SELECT id FROM symbols WHERE kind = ?)`,
+		edgeKind, symKind,
+	)
+	if err != nil {
+		return fmt.Errorf("delete %s edges to %s symbols: %w", edgeKind, symKind, err)
+	}
+	return nil
+}
+
+// DeleteEdgesByKindFromPackage removes edges of a kind originating from
+// exactly the given package. Symbol IDs are "pkgpath.Name", so matching
+// "pkgpath." scopes to the package itself, not subpackages — unlike
+// DeleteEdgesByKindAndPackages, which prefix-matches for whole-module
+// rewrites.
+func (s *Store) DeleteEdgesByKindFromPackage(kind, pkgPath string) error {
+	_, err := s.db.Exec(`DELETE FROM edges WHERE kind = ? AND from_id LIKE ?`, kind, pkgPath+".%")
+	if err != nil {
+		return fmt.Errorf("delete %s edges from package %s: %w", kind, pkgPath, err)
+	}
+	return nil
+}
+
 // DeleteByFile removes all symbols (and their edges) from a given file.
 // Used during incremental reindexing when a file changes. All deletes run in
 // a single transaction so a partial failure cannot orphan rows.

@@ -307,6 +307,19 @@ func cmdReindex(args []string) {
 		}
 	}
 
+	// Go and proto changes both invalidate proto↔Go implements edges (the
+	// per-package reindex clears them), so relink before finishing. Without
+	// this, get_impact and the get_callers RPC fallback stay stale until
+	// the next full `scout index` — and this command is what the pre-commit
+	// hook runs.
+	if len(goFiles) > 0 || len(protoFiles) > 0 {
+		if linked, err := indexer.LinkProtoToGo(s); err != nil {
+			logger.Warn("proto-go relink failed", "err", err)
+		} else {
+			logger.Info("proto-go relink complete", "linked", linked)
+		}
+	}
+
 	if err := s.SetMeta("last_indexed", fmt.Sprintf("%d", time.Now().Unix())); err != nil {
 		logger.Warn("set meta failed", "err", err)
 	}
