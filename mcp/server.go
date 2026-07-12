@@ -626,50 +626,55 @@ func renderContextText(r *query.ContextResponse) string {
 	return b.String()
 }
 
-func (s *Server) callGetBody(args json.RawMessage) (any, error) {
+// symbolIDParam decodes a symbol_id argument, accepting "id" as an alias —
+// results name the field "id", so models routinely pass that name back.
+func symbolIDParam(args json.RawMessage) (string, error) {
 	var params struct {
 		SymbolID string `json:"symbol_id"`
+		ID       string `json:"id"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
-		return nil, fmt.Errorf("invalid arguments: %w", err)
+		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 	if params.SymbolID == "" {
-		return nil, fmt.Errorf("symbol_id is required — pass an id from get_relevant_context results")
+		params.SymbolID = params.ID
 	}
+	if params.SymbolID == "" {
+		return "", fmt.Errorf("symbol_id is required — pass an id from a previous tool result")
+	}
+	return params.SymbolID, nil
+}
 
-	return s.engine.GetBody(params.SymbolID)
+func (s *Server) callGetBody(args json.RawMessage) (any, error) {
+	id, err := symbolIDParam(args)
+	if err != nil {
+		return nil, err
+	}
+	return s.engine.GetBody(id)
 }
 
 func (s *Server) callGetCallers(args json.RawMessage) (any, error) {
-	var params struct {
-		SymbolID string `json:"symbol_id"`
+	id, err := symbolIDParam(args)
+	if err != nil {
+		return nil, err
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return nil, fmt.Errorf("invalid arguments: %w", err)
-	}
-
-	return s.engine.GetCallers(params.SymbolID)
+	return s.engine.GetCallers(id)
 }
 
 func (s *Server) callGetCallees(args json.RawMessage) (any, error) {
-	var params struct {
-		SymbolID string `json:"symbol_id"`
+	id, err := symbolIDParam(args)
+	if err != nil {
+		return nil, err
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return nil, fmt.Errorf("invalid arguments: %w", err)
-	}
-
-	return s.engine.GetCallees(params.SymbolID)
+	return s.engine.GetCallees(id)
 }
 
 func (s *Server) callGetFlow(args json.RawMessage) (any, error) {
-	var params struct {
-		SymbolID string `json:"symbol_id"`
+	id, err := symbolIDParam(args)
+	if err != nil {
+		return nil, err
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return nil, fmt.Errorf("invalid arguments: %w", err)
-	}
-	return s.engine.GetFlow(params.SymbolID)
+	return s.engine.GetFlow(id)
 }
 
 func (s *Server) callGetPattern(args json.RawMessage) (any, error) {
@@ -678,6 +683,9 @@ func (s *Server) callGetPattern(args json.RawMessage) (any, error) {
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return nil, fmt.Errorf("invalid arguments: %w", err)
+	}
+	if params.Task == "" {
+		return nil, fmt.Errorf(`task is required — call again as {"task": "create shipment"} (the parameter is named "task")`)
 	}
 	return s.engine.GetPattern(params.Task)
 }
@@ -716,25 +724,24 @@ func (s *Server) callGetConventions(args json.RawMessage) (any, error) {
 	if err := json.Unmarshal(args, &params); err != nil {
 		return nil, fmt.Errorf("invalid arguments: %w", err)
 	}
+	if params.Topic == "" {
+		return nil, fmt.Errorf(`topic is required — call again as {"topic": "pagination"} (the parameter is named "topic", not "pattern" or "query")`)
+	}
 	return s.engine.GetConventions(params.Topic)
 }
 
 func (s *Server) callGetImpact(args json.RawMessage) (any, error) {
-	var params struct {
-		SymbolID string `json:"symbol_id"`
+	id, err := symbolIDParam(args)
+	if err != nil {
+		return nil, err
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return nil, fmt.Errorf("invalid arguments: %w", err)
-	}
-	if params.SymbolID == "" {
-		return nil, fmt.Errorf("symbol_id is required")
-	}
-	return s.engine.GetImpact(params.SymbolID)
+	return s.engine.GetImpact(id)
 }
 
 func (s *Server) callGetViz(args json.RawMessage) (any, error) {
 	var params struct {
 		SymbolID  string `json:"symbol_id"`
+		ID        string `json:"id"`
 		Direction string `json:"direction"`
 		Depth     int    `json:"depth"`
 	}
@@ -742,7 +749,10 @@ func (s *Server) callGetViz(args json.RawMessage) (any, error) {
 		return nil, fmt.Errorf("invalid arguments: %w", err)
 	}
 	if params.SymbolID == "" {
-		return nil, fmt.Errorf("symbol_id is required")
+		params.SymbolID = params.ID
+	}
+	if params.SymbolID == "" {
+		return nil, fmt.Errorf("symbol_id is required — pass an id from a previous tool result")
 	}
 	return s.engine.GetViz(params.SymbolID, params.Direction, params.Depth)
 }

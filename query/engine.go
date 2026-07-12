@@ -211,8 +211,9 @@ func (e *Engine) GetRelevantContext(req ContextRequest) (*ContextResponse, error
 	// exist.
 	skipFTS := qtype == queryPrecise
 
-	// Phase 2: FTS for remaining discovery.
-	if !skipFTS {
+	// Phase 2: FTS for remaining discovery. An empty FTS query (all stop
+	// words) would be an FTS5 syntax error — skip the phase instead.
+	if !skipFTS && buildFTSQuery(req.Task) != "" {
 		ftsQuery := buildFTSQuery(req.Task)
 		queryTerms := strings.Split(ftsQuery, " OR ")
 		compoundParts := extractCompoundParts(req.Task)
@@ -1367,6 +1368,11 @@ type ConventionResult struct {
 func (e *Engine) GetConventions(topic string) (*ConventionResult, error) {
 	// 1. Try documented conventions (conventions.yaml → DB).
 	ftsQuery := buildFTSQuery(topic)
+	// An empty FTS query (empty topic, or all stop words) would surface as
+	// a raw FTS5 syntax error — return something actionable instead.
+	if ftsQuery == "" {
+		return nil, fmt.Errorf("topic %q contains no searchable terms — pass a pattern name like \"pagination\" or \"auth\"", topic)
+	}
 	conventions, err := e.store.SearchConventions(ftsQuery)
 	if err == nil && len(conventions) > 0 {
 		c := conventions[0]
@@ -1467,8 +1473,9 @@ func (e *Engine) getPatternSlices(task string, limit int) ([]*PatternSlice, erro
 		}
 	}
 
-	// Phase 2: fall back to FTS if no exact match.
-	if len(candidates) == 0 {
+	// Phase 2: fall back to FTS if no exact match. Skip on an empty FTS
+	// query (all stop words) — it would be an FTS5 syntax error.
+	if len(candidates) == 0 && buildFTSQuery(task) != "" {
 		ftsQuery := buildFTSQuery(task)
 		queryTerms := strings.Split(ftsQuery, " OR ")
 
@@ -2465,8 +2472,11 @@ func buildFTSQuery(task string) string {
 		terms = append(terms, w)
 	}
 
+	// No searchable terms left. Returning the raw task here would feed
+	// unsanitized text (or an empty string) into an FTS5 MATCH — a syntax
+	// error. Callers treat "" as "skip FTS / nothing to search".
 	if len(terms) == 0 {
-		return task
+		return ""
 	}
 
 	return strings.Join(terms, " OR ")
