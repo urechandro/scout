@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/urechandro/scout/query"
 	"github.com/urechandro/scout/store"
@@ -165,7 +166,7 @@ If the result is empty or does not contain what you expected: accept that the sy
 
 Use specific Go names when you know them ("ValidateToken", "ShipmentService"). Use domain terms when exploring ("rate limiting", "auth middleware"). The search matches against symbol names, signatures, and docstrings.
 
-Returns compact pointers by default. Pass verbose=true only if you need docstrings to decide which symbol to expand. Each result includes an id you can pass to get_body, get_callers, or get_flow.
+Returns compact pointers by default, rendered as one text line per symbol: kind, id, signature, file:line. IDs and file paths are project-relative; pass them back to get_body, get_callers, or get_flow exactly as returned. Pass verbose=true only if you need docstrings to decide which symbol to expand.
 
 When results span multiple packages, the response includes a "packages" field summarizing hit counts per package — read this first to orient before drilling into individual symbols.`,
 			"inputSchema": map[string]any{
@@ -207,7 +208,7 @@ Prefer IDs from get_relevant_context results over guessing. But if you must gues
 				"properties": map[string]any{
 					"symbol_id": map[string]any{
 						"type":        "string",
-						"description": "Fully-qualified symbol ID from a previous tool result, e.g. github.com/myapp/auth.ValidateToken or github.com/myapp/svc.Server.CreateShipment.",
+						"description": "Symbol ID from a previous tool result, e.g. internal/auth.ValidateToken or internal/svc.Server.CreateShipment. Both project-relative and fully-qualified forms are accepted.",
 					},
 				},
 				"required": []string{"symbol_id"},
@@ -532,9 +533,18 @@ func (s *Server) handleToolsCall(req request) *response {
 		}
 	}
 
-	text, err := json.MarshalIndent(result, "", "  ")
-	if err != nil {
-		return s.errResponse(req.ID, -32603, "marshal result")
+	// Results render either as plain text (when the handler pre-rendered a
+	// string) or compact JSON. Never indented JSON — the model doesn't need
+	// pretty-printing and the whitespace + repeated keys cost real tokens.
+	var text []byte
+	if str, ok := result.(string); ok {
+		text = []byte(str)
+	} else {
+		var err error
+		text, err = json.Marshal(result)
+		if err != nil {
+			return s.errResponse(req.ID, -32603, "marshal result")
+		}
 	}
 
 	estimatedTokens := len(text) / 4
@@ -571,12 +581,49 @@ func (s *Server) callGetRelevantContext(args json.RawMessage) (any, error) {
 		depth = 3
 	}
 
-	return s.engine.GetRelevantContext(query.ContextRequest{
+	resp, err := s.engine.GetRelevantContext(query.ContextRequest{
 		Task:              params.Query,
 		BudgetTokens:      params.BudgetTokens,
 		MaxExpansionDepth: depth,
 		Verbose:           params.Verbose,
 	})
+	if err != nil {
+		return nil, err
+	}
+	// Brief mode renders as plain text: one line per symbol. JSON's repeated
+	// keys and quoting add ~40% overhead on pointer-shaped payloads and the
+	// model parses aligned text lines just as reliably.
+	if !params.Verbose {
+		return renderContextText(resp), nil
+	}
+	return resp, nil
+}
+
+// renderContextText renders a brief ContextResponse as plain text, one line
+// per symbol: kind, id, signature, file:start-end.
+func renderContextText(r *query.ContextResponse) string {
+	var b strings.Builder
+	if len(r.Packages) > 0 {
+		b.WriteString("packages:\n")
+		for _, p := range r.Packages {
+			fmt.Fprintf(&b, "  %s — %d (%s)\n", p.Package, p.Count, p.Kinds)
+		}
+		b.WriteString("\n")
+	}
+	if len(r.Symbols) == 0 {
+		b.WriteString("no results — the symbol does not exist in the index\n")
+	}
+	for _, sym := range r.Symbols {
+		loc := fmt.Sprintf("%s:%d", sym.File, sym.LineStart)
+		if sym.LineEnd > sym.LineStart {
+			loc = fmt.Sprintf("%s:%d-%d", sym.File, sym.LineStart, sym.LineEnd)
+		}
+		fmt.Fprintf(&b, "%s %s — %s — %s\n", sym.Kind, sym.ID, sym.Signature, loc)
+	}
+	if r.Truncated > 0 {
+		fmt.Fprintf(&b, "(+%d more trimmed to budget — narrow the query or raise budget_tokens)\n", r.Truncated)
+	}
+	return b.String()
 }
 
 func (s *Server) callGetBody(args json.RawMessage) (any, error) {
