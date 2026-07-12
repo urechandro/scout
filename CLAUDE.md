@@ -78,6 +78,33 @@ next question can only be answered by reading source lines (`get_body`, `get_flo
 a new session, and paste it in. Carrying exploration context into implementation
 turns multiplies re-read cost on every subsequent token.
 
+**Display elision: project-relative IDs and paths, text rendering for brief
+results.** Symbol IDs and file paths dominate the byte cost of pointer-shaped
+responses (measured on core-planning-service: avg ID 112 chars, avg path 113
+chars, most of it constant prefix). At render time the engine strips the
+module prefix from IDs (`github.com/acme/svc/internal/auth.ValidateToken` →
+`internal/auth.ValidateToken`) and makes file paths root-relative. Display-only:
+the store always holds full IDs; elided IDs are accepted back as inputs
+(`expandID` re-adds the prefix, `FuzzyGetSymbol` suffix-match covers the rest).
+Root-package IDs (`github.com/acme/svc.Foo`) are NOT elided — stripping to
+`.Foo` would be ambiguous. Elision happens at engine exit points (after
+dedup/expand, which need full IDs for store lookups), and in
+`GetRelevantContext` specifically *before* `trimToBudget` so the budget is
+charged for rendered lengths. `scout serve` resolves the project root from
+`--root`, falling back to `--watch`, then the parent of the db's `.scout/`
+dir; the module prefix comes from the root's `go.mod`. No root resolved → no
+elision (old behavior). The same resolved root now also loads
+`.scout/config.yaml` for the embedder, so serve without `--watch` still gets
+Phase 3.
+
+The MCP server renders brief `get_relevant_context` results as plain text
+(one line per symbol: kind, id, signature, file:line) instead of JSON —
+repeated keys and indentation were pure overhead. Everything else renders as
+compact `json.Marshal` (never `MarshalIndent`). `trimToBudget`'s cost model
+matches these formats (~20 chars/symbol overhead for text lines, ~110 for
+verbose JSON), so the 600/2000-token budgets now reflect actual output size —
+previously real payloads ran ~45% over budget from serialization overhead.
+
 **Exact name lookup before FTS.** The query engine's primary retrieval path is
 exact name lookup for compound identifiers (PascalCase/camelCase). FTS is the
 fallback for natural language queries. This solved a major precision problem:

@@ -70,13 +70,24 @@ type Options struct {
 	// PhaseThreeTimeout caps how long Phase 3 (query embed + cosine scan)
 	// is allowed to take per call. 0 means use the default (1.5s).
 	PhaseThreeTimeout time.Duration
+	// ModulePrefix is the Go module path of the indexed project (e.g.
+	// "github.com/acme/svc"). When set, symbol IDs in responses are elided
+	// to module-relative form ("backend/auth.ValidateToken"). Display-only:
+	// the store always holds full IDs, and elided IDs are accepted back as
+	// tool inputs.
+	ModulePrefix string
+	// RootDir is the absolute project root. When set, file paths in
+	// responses are made root-relative. Display-only, like ModulePrefix.
+	RootDir string
 }
 
 // Engine executes context queries against a Store.
 type Engine struct {
-	store    *store.Store
-	embedder embedder.Client
-	p3Budget time.Duration
+	store     *store.Store
+	embedder  embedder.Client
+	p3Budget  time.Duration
+	modPrefix string
+	rootDir   string
 
 	// Slab state for Phase 3. The slab is a flat in-memory copy of
 	// (id, vector) for every symbol that has an embedding under the
@@ -112,9 +123,11 @@ func New(s *store.Store, opts Options) *Engine {
 		timeout = defaultPhaseThreeTimeout
 	}
 	return &Engine{
-		store:    s,
-		embedder: opts.Embedder,
-		p3Budget: timeout,
+		store:     s,
+		embedder:  opts.Embedder,
+		p3Budget:  timeout,
+		modPrefix: strings.TrimSuffix(opts.ModulePrefix, "/"),
+		rootDir:   strings.TrimSuffix(opts.RootDir, "/"),
 	}
 }
 
@@ -283,6 +296,11 @@ func (e *Engine) GetRelevantContext(req ContextRequest) (*ContextResponse, error
 
 	ranked := rankSymbols(scored)
 	ranked = prioritizeSource(ranked)
+	// Elide before trimming so the budget is charged for what actually
+	// renders, not the full-length IDs and absolute paths.
+	for _, s := range ranked {
+		e.elideSummary(s)
+	}
 	kept, truncated := trimToBudget(ranked, req.BudgetTokens, req.Verbose)
 
 	if !req.Verbose {
@@ -525,6 +543,7 @@ type BodyResponse struct {
 // If the exact ID is not found, it falls back to suffix and name matching
 // so that guessed or partial IDs still resolve.
 func (e *Engine) GetBody(symbolID string) (*BodyResponse, error) {
+	symbolID = e.expandID(symbolID)
 	sym, candidates, err := e.store.FuzzyGetSymbol(symbolID)
 	if err != nil {
 		return nil, fmt.Errorf("get body for %s: %w", symbolID, err)
@@ -560,6 +579,15 @@ func (e *Engine) GetBody(symbolID string) (*BodyResponse, error) {
 	}
 
 	resp.References = e.extractReferences(sym)
+
+	// Elide last: readLines/readDecl above need the absolute path, and
+	// extractReferences needs the full ID to skip self.
+	sym.ID = e.shortID(sym.ID)
+	sym.File = e.shortFile(sym.File)
+	for i := range resp.OtherIDs {
+		resp.OtherIDs[i] = e.shortID(resp.OtherIDs[i])
+	}
+	e.elideSummaries(resp.References)
 
 	return resp, nil
 }
@@ -735,7 +763,7 @@ func (e *Engine) GetImpact(symbolID string) (*ImpactResponse, error) {
 				continue
 			}
 			visited[c.ID] = true
-			affected = append(affected, toSummary(c, 0, "calls "+seedID))
+			affected = append(affected, toSummary(c, 0, "calls "+e.shortID(seedID)))
 		}
 	}
 
@@ -767,6 +795,12 @@ func (e *Engine) GetImpact(symbolID string) (*ImpactResponse, error) {
 	resp.Generated = dedupGenerated(generated)
 
 	resp.Total = len(resp.Proto) + len(resp.Generated) + len(resp.Implementation) + len(resp.Tests)
+
+	e.elideSummary(&resp.Symbol)
+	e.elideSummaries(resp.Proto)
+	e.elideSummaries(resp.Generated)
+	e.elideSummaries(resp.Implementation)
+	e.elideSummaries(resp.Tests)
 	return resp, nil
 }
 
@@ -825,6 +859,12 @@ func classifyLayer(file string) ImpactLayer {
 // If no call-graph callers exist, checks whether this symbol implements a
 // proto RPC or interface and returns those as entry points instead of [].
 func (e *Engine) GetCallers(symbolID string) ([]SymbolSummary, error) {
+	summaries, err := e.getCallers(symbolID)
+	e.elideSummaries(summaries)
+	return summaries, err
+}
+
+func (e *Engine) getCallers(symbolID string) ([]SymbolSummary, error) {
 	resolvedID, err := e.resolveSymbolID(symbolID)
 	if err != nil {
 		return nil, fmt.Errorf("get callers for %s: %w", symbolID, err)
@@ -883,6 +923,12 @@ func (e *Engine) GetCallers(symbolID string) ([]SymbolSummary, error) {
 // If no call-graph edges exist, falls back to extracting identifiers from
 // the function body and looking them up in the symbol table.
 func (e *Engine) GetCallees(symbolID string) ([]SymbolSummary, error) {
+	summaries, err := e.getCallees(symbolID)
+	e.elideSummaries(summaries)
+	return summaries, err
+}
+
+func (e *Engine) getCallees(symbolID string) ([]SymbolSummary, error) {
 	resolvedID, err := e.resolveSymbolID(symbolID)
 	if err != nil {
 		return nil, fmt.Errorf("get callees for %s: %w", symbolID, err)
@@ -1062,6 +1108,7 @@ func isIdentChar(b byte) bool {
 
 // resolveSymbolID resolves a potentially guessed/partial symbol ID to an exact one.
 func (e *Engine) resolveSymbolID(symbolID string) (string, error) {
+	symbolID = e.expandID(symbolID)
 	// Try exact first (fast path).
 	if _, err := e.store.GetSymbol(symbolID); err == nil {
 		return symbolID, nil
@@ -1072,6 +1119,80 @@ func (e *Engine) resolveSymbolID(symbolID string) (string, error) {
 		return "", err
 	}
 	return sym.ID, nil
+}
+
+// expandID maps a display-elided symbol ID back to its stored form by
+// re-adding the module prefix. IDs that already resolve, or that don't
+// resolve even with the prefix, pass through unchanged (the fuzzy paths
+// handle those).
+func (e *Engine) expandID(id string) string {
+	if e.modPrefix == "" {
+		return id
+	}
+	if _, err := e.store.GetSymbol(id); err == nil {
+		return id
+	}
+	full := e.modPrefix + "/" + id
+	if _, err := e.store.GetSymbol(full); err == nil {
+		return full
+	}
+	return id
+}
+
+// shortID elides the module prefix (or project root, for file-path-shaped
+// TS symbol IDs) from a symbol ID for display. Idempotent; IDs outside the
+// project (deps, stdlib) pass through unchanged.
+func (e *Engine) shortID(id string) string {
+	if e.modPrefix != "" {
+		if rest, ok := strings.CutPrefix(id, e.modPrefix+"/"); ok {
+			return rest
+		}
+	}
+	if e.rootDir != "" {
+		if rest, ok := strings.CutPrefix(id, e.rootDir+"/"); ok {
+			return rest
+		}
+	}
+	return id
+}
+
+// shortFile makes a file path project-root-relative for display. Paths
+// outside the root (module cache, stdlib) pass through unchanged.
+func (e *Engine) shortFile(f string) string {
+	if e.rootDir != "" {
+		if rest, ok := strings.CutPrefix(f, e.rootDir+"/"); ok {
+			return rest
+		}
+	}
+	return f
+}
+
+func (e *Engine) elideSummary(s *SymbolSummary) {
+	s.ID = e.shortID(s.ID)
+	s.File = e.shortFile(s.File)
+}
+
+func (e *Engine) elideSummaries(list []SymbolSummary) {
+	for i := range list {
+		e.elideSummary(&list[i])
+	}
+}
+
+func (e *Engine) elideWithBody(w *SymbolWithBody) {
+	if w == nil {
+		return
+	}
+	e.elideSummary(&w.SymbolSummary)
+}
+
+func (e *Engine) elideSlice(p *PatternSlice) {
+	if p == nil {
+		return
+	}
+	e.elideWithBody(p.RPC)
+	e.elideWithBody(p.RequestMessage)
+	e.elideWithBody(p.ResponseMessage)
+	e.elideWithBody(p.Implementation)
 }
 
 // PatternSlice is a vertical slice of one RPC pattern: proto → messages → Go impl.
@@ -1096,6 +1217,7 @@ func (e *Engine) GetPattern(task string) (*PatternSlice, error) {
 		return nil, err
 	}
 	if len(slices) > 0 {
+		e.elideSlice(slices[0])
 		return slices[0], nil
 	}
 
@@ -1113,12 +1235,14 @@ func (e *Engine) GetPattern(task string) (*PatternSlice, error) {
 		body, _ = readLines(best.File, best.LineStart, best.LineEnd)
 	}
 
-	return &PatternSlice{
+	slice := &PatternSlice{
 		Implementation: &SymbolWithBody{
 			SymbolSummary: toSummary(best, 1.0, fmt.Sprintf("nearest match (no RPC found for %q)", task)),
 			Body:          body,
 		},
-	}, nil
+	}
+	e.elideSlice(slice)
+	return slice, nil
 }
 
 // SimplestRPCResult is one entry in a SimplestResponse.
@@ -1129,10 +1253,10 @@ type SimplestRPCResult struct {
 
 // SimplestResponse is returned by GetSimplestRPC.
 type SimplestResponse struct {
-	Service     string              `json:"service,omitempty"`
-	Considered  int                 `json:"considered"`
-	Results     []SimplestRPCResult `json:"results"`
-	Hint        string              `json:"hint,omitempty"`
+	Service    string              `json:"service,omitempty"`
+	Considered int                 `json:"considered"`
+	Results    []SimplestRPCResult `json:"results"`
+	Hint       string              `json:"hint,omitempty"`
 }
 
 // GetSimplestRPC returns the RPCs with the fewest direct callees in their Go
@@ -1209,6 +1333,7 @@ func (e *Engine) GetSimplestRPC(service string, limit int) (*SimplestResponse, e
 		if err != nil {
 			return nil, fmt.Errorf("build slice for %s: %w", c.rpc.ID, err)
 		}
+		e.elideSlice(slice)
 		resp.Results = append(resp.Results, SimplestRPCResult{
 			PatternSlice: *slice,
 			CalleeCount:  c.calleeCount,
@@ -1268,6 +1393,7 @@ func (e *Engine) GetConventions(topic string) (*ConventionResult, error) {
 			result.Hint = fmt.Sprintf("Also related: %s", strings.Join(others, ", "))
 		}
 
+		e.elideSummaries(result.Examples)
 		return result, nil
 	}
 
@@ -1306,6 +1432,7 @@ func (e *Engine) GetConventions(topic string) (*ConventionResult, error) {
 	for _, item := range items {
 		summaries = append(summaries, toSummary(item.sym, item.score, "FTS match (no documented convention)"))
 	}
+	e.elideSummaries(summaries)
 
 	return &ConventionResult{
 		Name:     topic,
@@ -1739,6 +1866,14 @@ func (e *Engine) GetFlow(symbolID string) (*FlowResponse, error) {
 		})
 	}
 
+	e.elideWithBody(&resp.Symbol)
+	for i := range resp.Callers {
+		e.elideWithBody(&resp.Callers[i])
+	}
+	for i := range resp.Callees {
+		e.elideWithBody(&resp.Callees[i])
+	}
+
 	return resp, nil
 }
 
@@ -1780,7 +1915,7 @@ func (e *Engine) GetUnimplemented(service string) (*UnimplementedResponse, error
 
 	resp := &UnimplementedResponse{
 		Service:   svc.Name,
-		ServiceID: svc.ID,
+		ServiceID: e.shortID(svc.ID),
 		TotalRPCs: len(rpcs),
 		Hint:      hint,
 	}
@@ -1796,7 +1931,7 @@ func (e *Engine) GetUnimplemented(service string) (*UnimplementedResponse, error
 			resp.Unimplemented = append(resp.Unimplemented, UnimplementedRPC{
 				Name:            rpc.Name,
 				Signature:       rpc.Signature,
-				File:            rpc.File,
+				File:            e.shortFile(rpc.File),
 				LineStart:       rpc.LineStart,
 				RequestMessage:  reqMsg,
 				ResponseMessage: respMsg,
@@ -1814,7 +1949,7 @@ func (e *Engine) GetUnimplemented(service string) (*UnimplementedResponse, error
 			resp.Unimplemented = append(resp.Unimplemented, UnimplementedRPC{
 				Name:            rpc.Name,
 				Signature:       rpc.Signature,
-				File:            rpc.File,
+				File:            e.shortFile(rpc.File),
 				LineStart:       rpc.LineStart,
 				RequestMessage:  reqMsg,
 				ResponseMessage: respMsg,
@@ -1958,10 +2093,13 @@ func trimToBudget(ranked []*SymbolSummary, budgetTokens int, verbose bool) ([]Sy
 	for _, s := range ranked {
 		var cost int
 		if verbose {
-			cost = (len(s.Signature) + len(s.Docstring) + len(s.ID) + len(s.Why) + 60) / 4
+			// Rendered as compact JSON: field contents plus ~110 chars of
+			// keys, quotes, and line numbers per symbol.
+			cost = (len(s.Signature) + len(s.Docstring) + len(s.ID) + len(s.Why) + len(s.File) + 110) / 4
 		} else {
-			// Brief: id + kind + signature + file:line ≈ much smaller
-			cost = (len(s.ID) + len(s.Signature) + len(s.File) + 30) / 4
+			// Rendered as one text line: kind, id, signature, file:start-end
+			// plus ~20 chars of separators and line numbers.
+			cost = (len(s.ID) + len(s.Kind) + len(s.Signature) + len(s.File) + 20) / 4
 		}
 		if used+cost > budgetTokens {
 			return kept, len(ranked) - len(kept)

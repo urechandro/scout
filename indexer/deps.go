@@ -17,7 +17,7 @@ import (
 // are stored (no bodies, no docstrings) — enough for FTS discovery and
 // get_body reference resolution without falling back to grep/Read.
 func (idx *Indexer) indexDependencies(pkgs []*packages.Package) error {
-	modulePath := detectModulePath(idx.cfg.Dir)
+	modulePath := DetectModulePath(idx.cfg.Dir)
 
 	seen := make(map[string]bool)
 	var deps []*types.Package
@@ -155,7 +155,9 @@ func depObjKind(obj types.Object) string {
 	return "type"
 }
 
-func detectModulePath(dir string) string {
+// DetectModulePath reads the module path from dir's go.mod. Returns "" when
+// there is no go.mod or no module line — callers treat that as "unknown".
+func DetectModulePath(dir string) string {
 	data, err := os.ReadFile(filepath.Join(dir, "go.mod"))
 	if err != nil {
 		return ""

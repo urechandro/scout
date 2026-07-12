@@ -5,6 +5,7 @@ import (
 	"flag"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/urechandro/scout/config"
@@ -20,6 +21,7 @@ func cmdServe(args []string) {
 	fs := flag.NewFlagSet("scout serve", flag.ExitOnError)
 	dbPath := fs.String("db", "/data/index.db", "Path to SQLite database.")
 	watch := fs.String("watch", "", "Root directory to watch for file changes (enables live reindexing).")
+	root := fs.String("root", "", "Project root (defaults to --watch, or the parent of the db's .scout directory). Used for .scout/config.yaml and for rendering project-relative IDs and paths.")
 	tsconfig := fs.String("tsconfig", "", "Path to tsconfig.json for TypeScript live reindexing (requires --watch).")
 	tsCommand := fs.String("ts-command", "ts-callgraph", "Path to ts-callgraph binary.")
 	debug := fs.Bool("debug", false, "Enable debug logging.")
@@ -34,13 +36,24 @@ func cmdServe(args []string) {
 	}
 	defer s.Close()
 
+	rootDir := resolveRootDir(*root, *watch, *dbPath)
+	modulePrefix := ""
+	if rootDir != "" {
+		modulePrefix = indexer.DetectModulePath(rootDir)
+		logger.Info("project root resolved", "root", rootDir, "module", modulePrefix)
+	}
+
 	// Build the embedder client once and share it: the query engine consults
 	// it at retrieval time, the watcher uses it to re-embed on save. One
 	// client means one Ollama connection pool, and (critically) one source of
 	// truth about the configured model — the slab cache keys off it.
-	embedClient := loadEmbedderClient(*watch, logger)
+	embedClient := loadEmbedderClient(rootDir, logger)
 
-	engine := query.New(s, query.Options{Embedder: embedClient})
+	engine := query.New(s, query.Options{
+		Embedder:     embedClient,
+		ModulePrefix: modulePrefix,
+		RootDir:      rootDir,
+	})
 	server := mcp.New(logger, engine, s)
 
 	if *watch != "" {
@@ -78,6 +91,31 @@ func cmdServe(args []string) {
 		logger.Error("server error", "err", err)
 		os.Exit(1)
 	}
+}
+
+// resolveRootDir determines the project root for config loading and
+// project-relative rendering. Precedence: explicit --root, then --watch,
+// then the parent of the db's .scout directory (the `scout init` layout).
+// Returns "" when none apply — rendering then falls back to full IDs and
+// absolute paths.
+func resolveRootDir(root, watch, dbPath string) string {
+	candidate := root
+	if candidate == "" {
+		candidate = watch
+	}
+	if candidate == "" {
+		if dir := filepath.Dir(dbPath); filepath.Base(dir) == ".scout" {
+			candidate = filepath.Dir(dir)
+		}
+	}
+	if candidate == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(candidate)
+	if err != nil {
+		return candidate
+	}
+	return abs
 }
 
 // loadEmbedderClient reads .scout/config.yaml from rootDir and constructs the
