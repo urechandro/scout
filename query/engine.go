@@ -683,6 +683,13 @@ func (e *Engine) GetImpact(symbolID string) (*ImpactResponse, error) {
 		return nil, fmt.Errorf("get impact for %s: %w", resolvedID, err)
 	}
 
+	// Proto fields fan out through derived names in generated code, not
+	// same-name linkage — a field named "name" shares its name with half
+	// the corpus, so the generic phases below would drown the answer.
+	if sym.Kind == "field" {
+		return e.fieldImpact(sym), nil
+	}
+
 	resp := &ImpactResponse{
 		Symbol: toSummary(*sym, 0, "target"),
 	}
@@ -778,11 +785,15 @@ func (e *Engine) GetImpact(symbolID string) (*ImpactResponse, error) {
 		affected = append(affected, toSummary(c, 0, "references "+sym.Name+" (heuristic)"))
 	}
 
-	// Classify into layers, deduping generated copies across /gen/ directories.
+	return e.finishImpact(resp, affected), nil
+}
+
+// finishImpact classifies affected symbols into layers, dedupes generated
+// copies, totals, and elides. Shared by the generic and field impact paths.
+func (e *Engine) finishImpact(resp *ImpactResponse, affected []SymbolSummary) *ImpactResponse {
 	var generated []SymbolSummary
 	for _, s := range affected {
-		layer := classifyLayer(s.File)
-		switch layer {
+		switch classifyLayer(s.File) {
 		case LayerProto:
 			resp.Proto = append(resp.Proto, s)
 		case LayerGenerated:
@@ -802,7 +813,76 @@ func (e *Engine) GetImpact(symbolID string) (*ImpactResponse, error) {
 	e.elideSummaries(resp.Generated)
 	e.elideSummaries(resp.Implementation)
 	e.elideSummaries(resp.Tests)
-	return resp, nil
+	return resp
+}
+
+// fieldImpact traces a proto message field across layers. The generated Go
+// code derives new identifiers from the field name — pickup_time becomes
+// the PickupTime struct field and the GetPickupTime getter — so the search
+// is by derived name: getter methods on the message's struct, then body
+// references via getter call, direct access, and literal initialization.
+func (e *Engine) fieldImpact(sym *store.Symbol) *ImpactResponse {
+	resp := &ImpactResponse{Symbol: toSummary(*sym, 0, "target field")}
+
+	visited := map[string]bool{sym.ID: true}
+	var affected []SymbolSummary
+
+	// Declaring message (field ID = <messageID>.<field>).
+	msgName := ""
+	if i := strings.LastIndex(sym.ID, "."); i > 0 {
+		if msg, err := e.store.GetSymbol(sym.ID[:i]); err == nil {
+			msgName = msg.Name
+			visited[msg.ID] = true
+			affected = append(affected, toSummary(*msg, 0, "declaring message"))
+		}
+	}
+
+	goName := protoFieldGoName(sym.Name)
+	getter := "Get" + goName
+
+	// Generated getters. Getter names collide across messages (GetName
+	// exists on most), so require the message name in the method's ID.
+	methods, _ := e.store.GetByNameAndKind(getter, "method")
+	for _, m := range methods {
+		if msgName != "" && !strings.Contains(m.ID, "."+msgName+".") {
+			continue
+		}
+		if visited[m.ID] {
+			continue
+		}
+		visited[m.ID] = true
+		affected = append(affected, toSummary(m, 0, "generated getter"))
+	}
+
+	// Code touching the field: getter calls, direct struct access, and
+	// composite-literal initialization. Substring heuristics — prefix
+	// collisions (PickupTimeZone) can add near-miss entries.
+	for _, pattern := range []string{getter + "(", "." + goName, goName + ":"} {
+		refs, _ := e.store.SearchBodies(pattern, 15)
+		for _, r := range refs {
+			if visited[r.ID] {
+				continue
+			}
+			visited[r.ID] = true
+			affected = append(affected, toSummary(r, 0, "references "+goName+" (heuristic)"))
+		}
+	}
+
+	return e.finishImpact(resp, affected)
+}
+
+// protoFieldGoName converts a proto field name to the Go identifier
+// protoc-gen-go derives from it: pickup_time → PickupTime.
+func protoFieldGoName(name string) string {
+	parts := strings.Split(name, "_")
+	var b strings.Builder
+	for _, p := range parts {
+		if p == "" {
+			continue
+		}
+		b.WriteString(strings.ToUpper(p[:1]) + p[1:])
+	}
+	return b.String()
 }
 
 // dedupGenerated collapses symbols with the same name+kind across /gen/ directories,
@@ -2321,6 +2401,11 @@ func kindWeight(sym store.Symbol) float64 {
 		return -0.3
 	case "type", "const", "var":
 		return -0.2
+	case "field":
+		// Proto message fields exist for precise lookups and get_impact.
+		// In discovery they must rank below their message and any behavior
+		// symbols, or field-heavy protos turn results into field soup.
+		return -0.6
 	default:
 		return 0
 	}
