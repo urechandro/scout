@@ -201,11 +201,18 @@ func TestDiscovery_SnakeCaseFieldName(t *testing.T) {
 	})
 	e := New(s, Options{})
 
+	// "Visit" mirrors the live failure shape: a plain capitalized word that
+	// isCompoundIdent rejects, so only cross-term affinity over raw query
+	// words can break the same-name tie. Run each query several times —
+	// the original bug was a nondeterministic dedup tie-break that
+	// surfaced the right field in ~1 of 5 calls.
 	for _, q := range []string{
-		"ShipmentLeg pickup_time",             // message + field (discovery)
+		"ShipmentLeg pickup_time",             // camelCase message + field
 		"ShipmentLeg.pickup_time proto field", // dotted (discovery w/ extra words)
 	} {
-		resp, err := e.GetRelevantContext(ContextRequest{Task: q})
+		// budget_tokens 1000 mirrors the live Sonnet run: at tight budgets
+		// the field must survive the trim, not just make the ranked list.
+		resp, err := e.GetRelevantContext(ContextRequest{Task: q, BudgetTokens: 1000})
 		if err != nil {
 			t.Fatalf("GetRelevantContext(%q): %v", q, err)
 		}
@@ -221,6 +228,24 @@ func TestDiscovery_SnakeCaseFieldName(t *testing.T) {
 				ids[i] = sym.ID
 			}
 			t.Errorf("query %q should surface the field; got %v", q, ids)
+		}
+	}
+
+	// Plain capitalized message name (not camelCase): affinity must come
+	// from raw query words. Repeat to catch tie-break nondeterminism.
+	for i := 0; i < 5; i++ {
+		resp, err := e.GetRelevantContext(ContextRequest{Task: "Visit pickup_time", BudgetTokens: 1000})
+		if err != nil {
+			t.Fatalf("GetRelevantContext(Visit): %v", err)
+		}
+		found := false
+		for _, sym := range resp.Symbols {
+			if sym.ID == "planning.v1.Visit.pickup_time" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("run %d: 'Visit pickup_time' should surface Visit's field", i)
 		}
 	}
 
