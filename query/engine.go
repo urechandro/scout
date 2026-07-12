@@ -191,19 +191,33 @@ func (e *Engine) GetRelevantContext(req ContextRequest) (*ContextResponse, error
 	// "CreateShipmentLeg ShipmentLeg service" → look up "CreateShipmentLeg"
 	// and "ShipmentLeg" by name directly. These are high-confidence hits.
 	compounds := extractCompoundIdents(req.Task)
+	// Affinity terms are every word in the query, not just compound
+	// identifiers — "Activity" is a plain capitalized word that
+	// isCompoundIdent rejects, yet it's exactly the disambiguator when
+	// three messages carry a reported_start_time field.
+	affinityTerms := queryWords(req.Task)
 	for _, name := range compounds {
 		syms, err := e.store.GetByName(name)
 		if err != nil {
 			continue
 		}
 		for _, sym := range syms {
-			score := 3.0 + kindWeight(sym) + implBoost(sym) + generatedPenalty(sym)
+			kw := kindWeight(sym)
+			// The field penalty exists to keep fields out of discovery
+			// soup. A query containing the field's literal name is the
+			// precise case the penalty must not suppress — without this,
+			// FTS hits stacking name-bonus + term coverage (scores 4.0+)
+			// push the exact-match field past a tight trim budget.
+			if sym.Kind == "field" {
+				kw = 0
+			}
+			score := 3.0 + kw + implBoost(sym) + generatedPenalty(sym)
 			// Cross-term affinity: "Activity reported_start_time" names two
 			// identifiers, and three messages carry a reported_start_time
 			// field — the hit whose ID also contains the *other* identifier
 			// is the one the query meant. Segment-exact so "Activity" does
 			// not match "AdjustActivityReportedTimesRequest".
-			score += crossTermAffinity(sym.ID, compounds, name)
+			score += crossTermAffinity(sym.ID, affinityTerms, name)
 			s := toSummary(sym, score, "exact name match")
 			scored[sym.ID] = &s
 		}
@@ -2156,8 +2170,14 @@ func rankSymbols(scored map[string]*SymbolSummary) []*SymbolSummary {
 	for _, s := range scored {
 		ranked = append(ranked, s)
 	}
+	// Tie-break on ID: the slice is fed from a map, and unstable ordering
+	// of tied scores made identical queries return different result sets
+	// after trimming.
 	sort.Slice(ranked, func(i, j int) bool {
-		return ranked[i].Score > ranked[j].Score
+		if ranked[i].Score != ranked[j].Score {
+			return ranked[i].Score > ranked[j].Score
+		}
+		return ranked[i].ID < ranked[j].ID
 	})
 
 	return ranked
@@ -2306,14 +2326,19 @@ func dedup(scored map[string]*SymbolSummary) map[string]*SymbolSummary {
 		if len(group) < 2 {
 			continue
 		}
-		// Prefer backend/internal/gen (the importable package).
+		// Prefer backend/internal/gen (the importable package). Tie-break
+		// on ID: map iteration feeds this slice, and an unstable sort of
+		// tied scores made results flap between identical calls.
 		sort.Slice(group, func(i, j int) bool {
 			iBackend := strings.Contains(group[i].File, "backend")
 			jBackend := strings.Contains(group[j].File, "backend")
 			if iBackend != jBackend {
 				return iBackend
 			}
-			return group[i].Score > group[j].Score
+			if group[i].Score != group[j].Score {
+				return group[i].Score > group[j].Score
+			}
+			return group[i].ID < group[j].ID
 		})
 		for _, s := range group[1:] {
 			delete(scored, s.ID)
@@ -2333,7 +2358,13 @@ func dedup(scored map[string]*SymbolSummary) map[string]*SymbolSummary {
 		if len(group) < 3 {
 			continue
 		}
-		sort.Slice(group, func(i, j int) bool { return group[i].Score > group[j].Score })
+		// Deterministic tie-break (see gen-path dedup above).
+		sort.Slice(group, func(i, j int) bool {
+			if group[i].Score != group[j].Score {
+				return group[i].Score > group[j].Score
+			}
+			return group[i].ID < group[j].ID
+		})
 		for _, s := range group[1:] {
 			delete(scored, s.ID)
 		}
@@ -2622,6 +2653,21 @@ func extractCompoundParts(task string) []string {
 		}
 	}
 	return parts
+}
+
+// queryWords returns the identifier-shaped tokens of a query: punctuation
+// trimmed from the edges, tokens shorter than 3 chars dropped.
+func queryWords(task string) []string {
+	var out []string
+	for _, w := range strings.Fields(task) {
+		w = strings.TrimFunc(w, func(r rune) bool {
+			return !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '.')
+		})
+		if len(w) >= 3 {
+			out = append(out, w)
+		}
+	}
+	return out
 }
 
 // crossTermAffinity returns a bonus for each query identifier (other than
