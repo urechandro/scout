@@ -562,6 +562,7 @@ func (s *Server) handleToolsCall(req request) *response {
 func (s *Server) callGetRelevantContext(args json.RawMessage) (any, error) {
 	var params struct {
 		Query        string `json:"query"`
+		Task         string `json:"task"` // pre-rename alias; models and old CLAUDE.mds still use it
 		BudgetTokens int    `json:"budget_tokens"`
 		MaxDepth     int    `json:"max_depth"`
 		Verbose      bool   `json:"verbose"`
@@ -570,7 +571,10 @@ func (s *Server) callGetRelevantContext(args json.RawMessage) (any, error) {
 		return nil, fmt.Errorf("invalid arguments: %w", err)
 	}
 	if params.Query == "" {
-		return nil, fmt.Errorf("query is required")
+		params.Query = params.Task
+	}
+	if params.Query == "" {
+		return nil, fmt.Errorf(`query is required — call again as {"query": "..."}`)
 	}
 
 	depth := params.MaxDepth
@@ -679,13 +683,17 @@ func (s *Server) callGetFlow(args json.RawMessage) (any, error) {
 
 func (s *Server) callGetPattern(args json.RawMessage) (any, error) {
 	var params struct {
-		Task string `json:"task"`
+		Task  string `json:"task"`
+		Query string `json:"query"` // alias for symmetry with get_relevant_context
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return nil, fmt.Errorf("invalid arguments: %w", err)
 	}
 	if params.Task == "" {
-		return nil, fmt.Errorf(`task is required — call again as {"task": "create shipment"} (the parameter is named "task")`)
+		params.Task = params.Query
+	}
+	if params.Task == "" {
+		return nil, fmt.Errorf(`task is required — call again as {"task": "create shipment"}`)
 	}
 	return s.engine.GetPattern(params.Task)
 }
@@ -719,13 +727,21 @@ func (s *Server) callGetUnimplemented(args json.RawMessage) (any, error) {
 
 func (s *Server) callGetConventions(args json.RawMessage) (any, error) {
 	var params struct {
-		Topic string `json:"topic"`
+		Topic   string `json:"topic"`
+		Pattern string `json:"pattern"` // aliases: models guess these names
+		Query   string `json:"query"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return nil, fmt.Errorf("invalid arguments: %w", err)
 	}
 	if params.Topic == "" {
-		return nil, fmt.Errorf(`topic is required — call again as {"topic": "pagination"} (the parameter is named "topic", not "pattern" or "query")`)
+		params.Topic = params.Pattern
+	}
+	if params.Topic == "" {
+		params.Topic = params.Query
+	}
+	if params.Topic == "" {
+		return nil, fmt.Errorf(`topic is required — call again as {"topic": "pagination"}`)
 	}
 	return s.engine.GetConventions(params.Topic)
 }
