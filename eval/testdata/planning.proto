@@ -1,0 +1,23 @@
+// Miniature proto corpus for golden fixtures. Indexed by setupIndex in
+// eval_test.go alongside scout's own Go source, so fixtures can assert
+// proto-layer retrieval (messages, rpcs, fields) end to end.
+syntax = "proto3";
+
+package scouteval.v1;
+
+service LegService {
+  // Create a new shipment leg.
+  rpc CreateLeg(CreateLegRequest) returns (ShipmentLeg);
+}
+
+message CreateLegRequest {
+  ShipmentLeg leg = 1;
+}
+
+message ShipmentLeg {
+  // The resource name of this leg.
+  string name = 1;
+  // When pickup is scheduled at the origin location.
+  string scheduled_pickup_time = 2;
+  repeated string stop_ids = 3;
+}

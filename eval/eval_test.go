@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/urechandro/scout/indexer"
+	"github.com/urechandro/scout/protoindexer"
 	"github.com/urechandro/scout/query"
 	"github.com/urechandro/scout/store"
 )
@@ -42,6 +43,15 @@ func setupIndex(t *testing.T) *query.Engine {
 			CallGraph:        indexer.CallGraphAST,
 		}, s)
 		if err := idx.Run(); err != nil {
+			setupErr = err
+			return
+		}
+		// Index the miniature proto corpus so fixtures cover proto-layer
+		// retrieval (services, rpcs, messages, fields) end to end.
+		pidx := protoindexer.New(protoindexer.Config{
+			Dir: filepath.Join(repoRoot, "eval", "testdata"),
+		}, s)
+		if err := pidx.Run(); err != nil {
 			setupErr = err
 			return
 		}

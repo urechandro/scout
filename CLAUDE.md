@@ -54,7 +54,7 @@ your codebase (.go + .proto + .ts/.tsx files)
 | `get_pattern(task)` | Complete vertical slice: proto RPC → request/response messages → Go implementation, with full source bodies. Use before implementing a new RPC. Requires proto indexing; degrades to a single FTS hit otherwise. |
 | `get_body(symbol_id)` | Full source of one symbol plus signatures of referenced types/functions (up to 10). Works for any indexed symbol: Go functions, methods, structs, interfaces, **and proto messages, RPCs, enums, services**. Call only when about to read or edit it. |
 | `get_flow(symbol_id)` | Full source of a symbol plus caller/callee summaries in one call. Use instead of separate get_body + get_callers + get_callees. |
-| `get_impact(symbol_id)` | Full blast radius across layers. Traces proto↔Go name linkage, generated code, callers, implementors, and tests. Use before renaming or changing a type/field. |
+| `get_impact(symbol_id)` | Full blast radius across layers. Traces proto↔Go name linkage, generated code, callers, implementors, and tests. Use before renaming or changing a type/field. **Works on proto message fields** (`pkg.Message.field_name`): traces the declaring message, generated getters, and body references via derived Go names (pickup_time → PickupTime/GetPickupTime). |
 | `get_callers(symbol_id)` | Everything that calls this symbol. Falls back to interface/RPC lookup and body-reference heuristics when call graph edges are missing. |
 | `get_callees(symbol_id)` | Everything this symbol depends on. Falls back to body-reference extraction. |
 | `get_simplest_rpc(service, limit)` | Find the RPCs with the fewest direct callees in their Go implementation, ranked ascending. Returns full vertical slices (proto → messages → Go impl with bodies). Use to pick the cleanest existing example to copy when adding a new RPC. Stubs (zero callees) excluded. `service` is an optional substring filter. |
@@ -323,7 +323,13 @@ scout/
 
 ### protoindexer/indexer.go
 - Walks the configured directory for `.proto` files
-- Extracts services, RPCs, messages, and enums as symbols
+- Extracts services, RPCs, messages, enums, **and message fields** as symbols
+- Fields: kind `field`, ID `<pkg>.<Message>.<field_name>`, signature
+  `<type> <name> = <number>` (options stripped). Oneof members belong to the
+  enclosing message; nested-message/enum contents are skipped (not attributed
+  to the outer message). Fields carry a `-0.6` kindWeight in discovery
+  ranking so they surface for precise lookups and get_impact without turning
+  discovery results into field soup
 - Uses a line-by-line parser (no protoc dependency)
 - Tracks `blockSymIdx` in parse state to update LineEnd when closing braces are
   found — this gives get_body full proto message/enum/service definitions

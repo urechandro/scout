@@ -196,10 +196,10 @@ func TestNameMatchBonus(t *testing.T) {
 
 func TestImplBoost(t *testing.T) {
 	tests := []struct {
-		name    string
-		kind    string
-		pkg     string
-		want    float64
+		name string
+		kind string
+		pkg  string
+		want float64
 	}{
 		{"method in svc", "method", "myapp/svc", 0.5},
 		{"func in server", "func", "myapp/server", 0.5},
@@ -373,19 +373,19 @@ func TestGetRelevantContext_ExactNameLookup(t *testing.T) {
 			ID: "myapp/svc.Server.CreateShipmentLeg", Package: "myapp/svc",
 			Name: "CreateShipmentLeg", Kind: "method",
 			Signature: "func (s *Server) CreateShipmentLeg(ctx context.Context, req *CreateShipmentLegRequest) (*ShipmentLeg, error)",
-			File: "/svc/server.go", LineStart: 10, LineEnd: 50,
+			File:      "/svc/server.go", LineStart: 10, LineEnd: 50,
 		},
 		{
 			ID: "myapp/model.ShipmentLeg", Package: "myapp/model",
 			Name: "ShipmentLeg", Kind: "struct",
 			Signature: "type ShipmentLeg struct",
-			File: "/model/shipment.go", LineStart: 5, LineEnd: 20,
+			File:      "/model/shipment.go", LineStart: 5, LineEnd: 20,
 		},
 		{
 			ID: "myapp/auth.ValidateToken", Package: "myapp/auth",
 			Name: "ValidateToken", Kind: "func",
 			Signature: "func ValidateToken(token string) (*Claims, error)",
-			File: "/auth/auth.go", LineStart: 1, LineEnd: 10,
+			File:      "/auth/auth.go", LineStart: 1, LineEnd: 10,
 		},
 	})
 
@@ -428,14 +428,14 @@ func TestGetRelevantContext_FTSFallback(t *testing.T) {
 			Name: "ValidateToken", Kind: "func",
 			Signature: "func ValidateToken(token string) (*Claims, error)",
 			Docstring: "validates authentication tokens",
-			File: "/auth/auth.go", LineStart: 1, LineEnd: 10,
+			File:      "/auth/auth.go", LineStart: 1, LineEnd: 10,
 		},
 		{
 			ID: "myapp/auth.RefreshToken", Package: "myapp/auth",
 			Name: "RefreshToken", Kind: "func",
 			Signature: "func RefreshToken(token string) (string, error)",
 			Docstring: "refreshes an expired authentication token",
-			File: "/auth/refresh.go", LineStart: 1, LineEnd: 10,
+			File:      "/auth/refresh.go", LineStart: 1, LineEnd: 10,
 		},
 	})
 
@@ -471,32 +471,32 @@ func TestGetUnimplemented_MissingRPC(t *testing.T) {
 			ID: "shipment.v1.ShipmentService", Package: "shipment.v1",
 			Name: "ShipmentService", Kind: "service",
 			Signature: "service ShipmentService",
-			File: "/proto/shipment.proto", LineStart: 5, LineEnd: 10,
+			File:      "/proto/shipment.proto", LineStart: 5, LineEnd: 10,
 		},
 		{
 			ID: "shipment.v1.ShipmentService.CreateShipment", Package: "shipment.v1",
 			Name: "CreateShipment", Kind: "rpc",
 			Signature: "rpc CreateShipment(CreateShipmentRequest) returns (Shipment)",
-			File: "/proto/shipment.proto", LineStart: 6, LineEnd: 6,
+			File:      "/proto/shipment.proto", LineStart: 6, LineEnd: 6,
 		},
 		{
 			ID: "shipment.v1.ShipmentService.GetShipment", Package: "shipment.v1",
 			Name: "GetShipment", Kind: "rpc",
 			Signature: "rpc GetShipment(GetShipmentRequest) returns (Shipment)",
-			File: "/proto/shipment.proto", LineStart: 7, LineEnd: 7,
+			File:      "/proto/shipment.proto", LineStart: 7, LineEnd: 7,
 		},
 		{
 			ID: "shipment.v1.ShipmentService.DeleteShipment", Package: "shipment.v1",
 			Name: "DeleteShipment", Kind: "rpc",
 			Signature: "rpc DeleteShipment(DeleteShipmentRequest) returns (Empty)",
-			File: "/proto/shipment.proto", LineStart: 8, LineEnd: 8,
+			File:      "/proto/shipment.proto", LineStart: 8, LineEnd: 8,
 		},
 		// Only CreateShipment has a Go implementation.
 		{
 			ID: "myapp/svc.Server.CreateShipment", Package: "myapp/svc",
 			Name: "CreateShipment", Kind: "method",
 			Signature: "func (s *Server) CreateShipment(ctx context.Context, req *CreateShipmentRequest) (*Shipment, error)",
-			File: "/svc/server.go", LineStart: 10, LineEnd: 50,
+			File:      "/svc/server.go", LineStart: 10, LineEnd: 50,
 			Body: "func (s *Server) CreateShipment(ctx context.Context, req *CreateShipmentRequest) (*Shipment, error) {\n\treturn &Shipment{}, nil\n}",
 		},
 	})
@@ -558,19 +558,19 @@ func TestGetUnimplemented_StubbedRPC(t *testing.T) {
 			ID: "test.v1.TestService", Package: "test.v1",
 			Name: "TestService", Kind: "service",
 			Signature: "service TestService",
-			File: "/proto/test.proto", LineStart: 1, LineEnd: 5,
+			File:      "/proto/test.proto", LineStart: 1, LineEnd: 5,
 		},
 		{
 			ID: "test.v1.TestService.CreateShipment", Package: "test.v1",
 			Name: "CreateShipment", Kind: "rpc",
 			Signature: "rpc CreateShipment(CreateShipmentRequest) returns (Shipment)",
-			File: "/proto/test.proto", LineStart: 2, LineEnd: 2,
+			File:      "/proto/test.proto", LineStart: 2, LineEnd: 2,
 		},
 		{
 			ID: "myapp/svc.Server.CreateShipment", Package: "myapp/svc",
 			Name: "CreateShipment", Kind: "method",
 			Signature: "func (s *Server) CreateShipment(ctx context.Context, req *CreateShipmentRequest) (*Shipment, error)",
-			File: stubPath, LineStart: 1, LineEnd: 3,
+			File:      stubPath, LineStart: 1, LineEnd: 3,
 			Body: fmt.Sprintf("/* %s:1-3 */", stubPath),
 		},
 	})
@@ -596,19 +596,19 @@ func TestGetUnimplemented_FullyImplemented(t *testing.T) {
 			ID: "test.v1.Svc", Package: "test.v1",
 			Name: "Svc", Kind: "service",
 			Signature: "service Svc",
-			File: "/proto/test.proto", LineStart: 1, LineEnd: 5,
+			File:      "/proto/test.proto", LineStart: 1, LineEnd: 5,
 		},
 		{
 			ID: "test.v1.Svc.Ping", Package: "test.v1",
 			Name: "Ping", Kind: "rpc",
 			Signature: "rpc Ping(PingRequest) returns (PingResponse)",
-			File: "/proto/test.proto", LineStart: 2, LineEnd: 2,
+			File:      "/proto/test.proto", LineStart: 2, LineEnd: 2,
 		},
 		{
 			ID: "myapp/svc.Server.Ping", Package: "myapp/svc",
 			Name: "Ping", Kind: "method",
 			Signature: "func (s *Server) Ping(ctx context.Context, req *PingRequest) (*PingResponse, error)",
-			File: "/svc/server.go", LineStart: 1, LineEnd: 5,
+			File:      "/svc/server.go", LineStart: 1, LineEnd: 5,
 			Body: "func (s *Server) Ping(ctx context.Context, req *PingRequest) (*PingResponse, error) {\n\treturn &PingResponse{}, nil\n}",
 		},
 	})
@@ -665,7 +665,7 @@ func TestGetBody_References(t *testing.T) {
 			ID: "myapp/svc.Server.CreateShipment", Package: "myapp/svc",
 			Name: "CreateShipment", Kind: "method",
 			Signature: "func (s *Server) CreateShipment(ctx context.Context, req *CreateShipmentRequest) (*Shipment, error)",
-			File: "/svc/server.go", LineStart: 10, LineEnd: 30,
+			File:      "/svc/server.go", LineStart: 10, LineEnd: 30,
 			Body: `func (s *Server) CreateShipment(ctx context.Context, req *CreateShipmentRequest) (*Shipment, error) {
 	if err := ValidateToken(ctx); err != nil {
 		return nil, err
@@ -678,19 +678,19 @@ func TestGetBody_References(t *testing.T) {
 			ID: "myapp/auth.ValidateToken", Package: "myapp/auth",
 			Name: "ValidateToken", Kind: "func",
 			Signature: "func ValidateToken(ctx context.Context) error",
-			File: "/auth/auth.go", LineStart: 1, LineEnd: 10,
+			File:      "/auth/auth.go", LineStart: 1, LineEnd: 10,
 		},
 		{
 			ID: "myapp/builder.BuildShipmentLeg", Package: "myapp/builder",
 			Name: "BuildShipmentLeg", Kind: "func",
 			Signature: "func BuildShipmentLeg(req *CreateShipmentRequest) *ShipmentLeg",
-			File: "/builder/leg.go", LineStart: 1, LineEnd: 15,
+			File:      "/builder/leg.go", LineStart: 1, LineEnd: 15,
 		},
 		{
 			ID: "myapp/model.Shipment", Package: "myapp/model",
 			Name: "Shipment", Kind: "struct",
 			Signature: "type Shipment struct",
-			File: "/model/shipment.go", LineStart: 1, LineEnd: 10,
+			File:      "/model/shipment.go", LineStart: 1, LineEnd: 10,
 		},
 	})
 
@@ -754,7 +754,7 @@ func TestGetBody_NoReferences_EmptyBody(t *testing.T) {
 			ID: "myapp/model.Shipment", Package: "myapp/model",
 			Name: "Shipment", Kind: "struct",
 			Signature: "type Shipment struct",
-			File: "/model/shipment.go", LineStart: 1, LineEnd: 10,
+			File:      "/model/shipment.go", LineStart: 1, LineEnd: 10,
 			Body: "",
 		},
 	})
@@ -789,27 +789,27 @@ func TestGetPattern_MessageBodies(t *testing.T) {
 			ID: "shipment.v1.ShipmentService.CreateShipment", Package: "shipment.v1",
 			Name: "CreateShipment", Kind: "rpc",
 			Signature: "rpc CreateShipment(CreateShipmentRequest) returns (Shipment)",
-			File: filepath.Join(dir, "shipment.proto"), LineStart: 1, LineEnd: 1,
+			File:      filepath.Join(dir, "shipment.proto"), LineStart: 1, LineEnd: 1,
 		},
 		{
 			ID: "shipment.v1.CreateShipmentRequest", Package: "shipment.v1",
 			Name: "CreateShipmentRequest", Kind: "message",
 			Signature: "message CreateShipmentRequest",
-			File: reqPath, LineStart: 1, LineEnd: 4,
+			File:      reqPath, LineStart: 1, LineEnd: 4,
 			Body: fmt.Sprintf("/* %s:1-4 */", reqPath),
 		},
 		{
 			ID: "shipment.v1.Shipment", Package: "shipment.v1",
 			Name: "Shipment", Kind: "message",
 			Signature: "message Shipment",
-			File: respPath, LineStart: 1, LineEnd: 4,
+			File:      respPath, LineStart: 1, LineEnd: 4,
 			Body: fmt.Sprintf("/* %s:1-4 */", respPath),
 		},
 		{
 			ID: "myapp/svc.Server.CreateShipment", Package: "myapp/svc",
 			Name: "CreateShipment", Kind: "method",
 			Signature: "func (s *Server) CreateShipment(ctx context.Context, req *CreateShipmentRequest) (*Shipment, error)",
-			File: "/svc/server.go", LineStart: 10, LineEnd: 30,
+			File:      "/svc/server.go", LineStart: 10, LineEnd: 30,
 			Body: "func (s *Server) CreateShipment(ctx context.Context, req *CreateShipmentRequest) (*Shipment, error) {\n\treturn &Shipment{}, nil\n}",
 		},
 	})
@@ -850,25 +850,25 @@ func TestGetImpact_CrossLayerLinkage(t *testing.T) {
 			ID: "myapp/svc.Server.CreateShipment", Package: "myapp/svc",
 			Name: "CreateShipment", Kind: "method",
 			Signature: "func (s *Server) CreateShipment(ctx, req) (*resp, error)",
-			File: "/svc/server.go", LineStart: 10, LineEnd: 30,
+			File:      "/svc/server.go", LineStart: 10, LineEnd: 30,
 		},
 		{
 			ID: "myapp/proto.ShipmentService.CreateShipment", Package: "myapp/proto",
 			Name: "CreateShipment", Kind: "rpc",
 			Signature: "rpc CreateShipment(CreateShipmentRequest) returns (Shipment)",
-			File: "/proto/shipment.proto", LineStart: 5, LineEnd: 5,
+			File:      "/proto/shipment.proto", LineStart: 5, LineEnd: 5,
 		},
 		{
 			ID: "myapp/gen.CreateShipment", Package: "myapp/gen",
 			Name: "CreateShipment", Kind: "method",
 			Signature: "func CreateShipment(ctx, req) (*resp, error)",
-			File: "/gen/shipment.pb.go", LineStart: 100, LineEnd: 120,
+			File:      "/gen/shipment.pb.go", LineStart: 100, LineEnd: 120,
 		},
 		{
 			ID: "myapp/svc_test.TestCreateShipment", Package: "myapp/svc_test",
 			Name: "TestCreateShipment", Kind: "func",
 			Signature: "func TestCreateShipment(t *testing.T)",
-			File: "/svc/server_test.go", LineStart: 50, LineEnd: 80,
+			File:      "/svc/server_test.go", LineStart: 50, LineEnd: 80,
 		},
 	})
 
@@ -924,19 +924,19 @@ func TestGetImpact_RPCMessages(t *testing.T) {
 			ID: "myapp/proto.ShipmentService.CreateShipment", Package: "myapp/proto",
 			Name: "CreateShipment", Kind: "rpc",
 			Signature: "rpc CreateShipment(CreateShipmentRequest) returns (CreateShipmentResponse)",
-			File: "/proto/shipment.proto", LineStart: 5, LineEnd: 5,
+			File:      "/proto/shipment.proto", LineStart: 5, LineEnd: 5,
 		},
 		{
 			ID: "myapp/proto.CreateShipmentRequest", Package: "myapp/proto",
 			Name: "CreateShipmentRequest", Kind: "message",
 			Signature: "message CreateShipmentRequest",
-			File: "/proto/shipment.proto", LineStart: 10, LineEnd: 20,
+			File:      "/proto/shipment.proto", LineStart: 10, LineEnd: 20,
 		},
 		{
 			ID: "myapp/proto.CreateShipmentResponse", Package: "myapp/proto",
 			Name: "CreateShipmentResponse", Kind: "message",
 			Signature: "message CreateShipmentResponse",
-			File: "/proto/shipment.proto", LineStart: 22, LineEnd: 30,
+			File:      "/proto/shipment.proto", LineStart: 22, LineEnd: 30,
 		},
 	})
 
@@ -977,20 +977,20 @@ func TestGetFlow_WithCallersAndCallees(t *testing.T) {
 			ID: "myapp/svc.Server.CreateShipment", Package: "myapp/svc",
 			Name: "CreateShipment", Kind: "method",
 			Signature: "func (s *Server) CreateShipment(ctx, req) (*resp, error)",
-			File: "/svc/server.go", LineStart: 10, LineEnd: 30,
+			File:      "/svc/server.go", LineStart: 10, LineEnd: 30,
 			Body: "func (s *Server) CreateShipment(ctx, req) (*resp, error) {\n\treturn nil, nil\n}",
 		},
 		{
 			ID: "myapp/handler.HandleCreate", Package: "myapp/handler",
 			Name: "HandleCreate", Kind: "func",
 			Signature: "func HandleCreate()",
-			File: "/handler/create.go", LineStart: 1, LineEnd: 10,
+			File:      "/handler/create.go", LineStart: 1, LineEnd: 10,
 		},
 		{
 			ID: "myapp/repo.Save", Package: "myapp/repo",
 			Name: "Save", Kind: "method",
 			Signature: "func (r *Repo) Save(ctx, obj) error",
-			File: "/repo/repo.go", LineStart: 1, LineEnd: 15,
+			File:      "/repo/repo.go", LineStart: 1, LineEnd: 15,
 		},
 	})
 
@@ -1041,19 +1041,19 @@ func TestGetCallers_DirectEdges(t *testing.T) {
 			ID: "myapp/svc.Server.CreateShipment", Package: "myapp/svc",
 			Name: "CreateShipment", Kind: "method",
 			Signature: "func (s *Server) CreateShipment(ctx, req) (*resp, error)",
-			File: "/svc/server.go", LineStart: 10, LineEnd: 30,
+			File:      "/svc/server.go", LineStart: 10, LineEnd: 30,
 		},
 		{
 			ID: "myapp/handler.HandleCreate", Package: "myapp/handler",
 			Name: "HandleCreate", Kind: "func",
 			Signature: "func HandleCreate()",
-			File: "/handler/create.go", LineStart: 1, LineEnd: 10,
+			File:      "/handler/create.go", LineStart: 1, LineEnd: 10,
 		},
 		{
 			ID: "myapp/handler.HandleBatch", Package: "myapp/handler",
 			Name: "HandleBatch", Kind: "func",
 			Signature: "func HandleBatch()",
-			File: "/handler/batch.go", LineStart: 1, LineEnd: 10,
+			File:      "/handler/batch.go", LineStart: 1, LineEnd: 10,
 		},
 	})
 
@@ -1093,13 +1093,13 @@ func TestGetCallers_FallbackToImplements(t *testing.T) {
 			ID: "myapp/svc.Server.CreateShipment", Package: "myapp/svc",
 			Name: "CreateShipment", Kind: "method",
 			Signature: "func (s *Server) CreateShipment(ctx, req) (*resp, error)",
-			File: "/svc/server.go", LineStart: 10, LineEnd: 30,
+			File:      "/svc/server.go", LineStart: 10, LineEnd: 30,
 		},
 		{
 			ID: "myapp/proto.ShipmentService.CreateShipment", Package: "myapp/proto",
 			Name: "CreateShipment", Kind: "rpc",
 			Signature: "rpc CreateShipment(CreateShipmentRequest) returns (Shipment)",
-			File: "/proto/shipment.proto", LineStart: 5, LineEnd: 5,
+			File:      "/proto/shipment.proto", LineStart: 5, LineEnd: 5,
 		},
 	})
 
@@ -1132,13 +1132,13 @@ func TestGetCallers_FallbackToBodyReference(t *testing.T) {
 			ID: "myapp/util.NewClient", Package: "myapp/util",
 			Name: "NewClient", Kind: "func",
 			Signature: "func NewClient() *Client",
-			File: "/util/client.go", LineStart: 1, LineEnd: 10,
+			File:      "/util/client.go", LineStart: 1, LineEnd: 10,
 		},
 		{
 			ID: "myapp/main.setup", Package: "myapp/main",
 			Name: "setup", Kind: "func",
 			Signature: "func setup()",
-			File: "/main.go", LineStart: 1, LineEnd: 20,
+			File:      "/main.go", LineStart: 1, LineEnd: 20,
 			Body: "func setup() {\n\tc := NewClient()\n\t_ = c\n}",
 		},
 	})
@@ -1166,19 +1166,19 @@ func TestGetCallees_DirectEdges(t *testing.T) {
 			ID: "myapp/svc.Server.CreateShipment", Package: "myapp/svc",
 			Name: "CreateShipment", Kind: "method",
 			Signature: "func (s *Server) CreateShipment(ctx, req) (*resp, error)",
-			File: "/svc/server.go", LineStart: 10, LineEnd: 30,
+			File:      "/svc/server.go", LineStart: 10, LineEnd: 30,
 		},
 		{
 			ID: "myapp/auth.ValidateToken", Package: "myapp/auth",
 			Name: "ValidateToken", Kind: "func",
 			Signature: "func ValidateToken(ctx) error",
-			File: "/auth/auth.go", LineStart: 1, LineEnd: 10,
+			File:      "/auth/auth.go", LineStart: 1, LineEnd: 10,
 		},
 		{
 			ID: "myapp/repo.Save", Package: "myapp/repo",
 			Name: "Save", Kind: "method",
 			Signature: "func (r *Repo) Save(ctx, obj) error",
-			File: "/repo/repo.go", LineStart: 1, LineEnd: 15,
+			File:      "/repo/repo.go", LineStart: 1, LineEnd: 15,
 		},
 	})
 
@@ -1215,14 +1215,14 @@ func TestGetCallees_FallbackToBody(t *testing.T) {
 			ID: "myapp/svc.Server.CreateShipment", Package: "myapp/svc",
 			Name: "CreateShipment", Kind: "method",
 			Signature: "func (s *Server) CreateShipment(ctx, req) (*resp, error)",
-			File: "/svc/server.go", LineStart: 10, LineEnd: 30,
+			File:      "/svc/server.go", LineStart: 10, LineEnd: 30,
 			Body: "func (s *Server) CreateShipment(ctx, req) (*resp, error) {\n\tValidateToken(ctx)\n\treturn nil, nil\n}",
 		},
 		{
 			ID: "myapp/auth.ValidateToken", Package: "myapp/auth",
 			Name: "ValidateToken", Kind: "func",
 			Signature: "func ValidateToken(ctx) error",
-			File: "/auth/auth.go", LineStart: 1, LineEnd: 10,
+			File:      "/auth/auth.go", LineStart: 1, LineEnd: 10,
 		},
 	})
 
@@ -1257,7 +1257,7 @@ func TestGetConventions_DocumentedConvention(t *testing.T) {
 			ID: "myapp/svc.Server.CreateShipment", Package: "myapp/svc",
 			Name: "CreateShipment", Kind: "method",
 			Signature: "func (s *Server) CreateShipment(ctx, req) (*resp, error)",
-			File: "/svc/server.go", LineStart: 10, LineEnd: 30,
+			File:      "/svc/server.go", LineStart: 10, LineEnd: 30,
 		},
 	})
 
@@ -1298,13 +1298,13 @@ func TestGetConventions_FTSFallback(t *testing.T) {
 			ID: "myapp/middleware.RateLimit", Package: "myapp/middleware",
 			Name: "RateLimit", Kind: "func",
 			Signature: "func RateLimit(next http.Handler) http.Handler",
-			File: "/middleware/rate.go", LineStart: 1, LineEnd: 20,
+			File:      "/middleware/rate.go", LineStart: 1, LineEnd: 20,
 		},
 		{
 			ID: "myapp/middleware.RateLimiter", Package: "myapp/middleware",
 			Name: "RateLimiter", Kind: "struct",
 			Signature: "type RateLimiter struct",
-			File: "/middleware/rate.go", LineStart: 22, LineEnd: 30,
+			File:      "/middleware/rate.go", LineStart: 22, LineEnd: 30,
 		},
 	})
 
@@ -1344,19 +1344,19 @@ func TestExpand_OneHop(t *testing.T) {
 			ID: "myapp/svc.Server.CreateShipment", Package: "myapp/svc",
 			Name: "CreateShipment", Kind: "method",
 			Signature: "func (s *Server) CreateShipment(ctx, req) (*resp, error)",
-			File: "/svc/server.go", LineStart: 10, LineEnd: 30,
+			File:      "/svc/server.go", LineStart: 10, LineEnd: 30,
 		},
 		{
 			ID: "myapp/handler.HandleCreate", Package: "myapp/handler",
 			Name: "HandleCreate", Kind: "func",
 			Signature: "func HandleCreate()",
-			File: "/handler/create.go", LineStart: 1, LineEnd: 10,
+			File:      "/handler/create.go", LineStart: 1, LineEnd: 10,
 		},
 		{
 			ID: "myapp/repo.Save", Package: "myapp/repo",
 			Name: "Save", Kind: "method",
 			Signature: "func (r *Repo) Save(ctx, obj) error",
-			File: "/repo/repo.go", LineStart: 1, LineEnd: 15,
+			File:      "/repo/repo.go", LineStart: 1, LineEnd: 15,
 		},
 	})
 
@@ -1395,13 +1395,13 @@ func TestExpand_ZeroDepth(t *testing.T) {
 			ID: "myapp/svc.Server.CreateShipment", Package: "myapp/svc",
 			Name: "CreateShipment", Kind: "method",
 			Signature: "func (s *Server) CreateShipment(ctx, req) (*resp, error)",
-			File: "/svc/server.go", LineStart: 10, LineEnd: 30,
+			File:      "/svc/server.go", LineStart: 10, LineEnd: 30,
 		},
 		{
 			ID: "myapp/repo.Save", Package: "myapp/repo",
 			Name: "Save", Kind: "method",
 			Signature: "func (r *Repo) Save(ctx, obj) error",
-			File: "/repo/repo.go", LineStart: 1, LineEnd: 15,
+			File:      "/repo/repo.go", LineStart: 1, LineEnd: 15,
 		},
 	})
 
@@ -1430,13 +1430,13 @@ func TestExpand_CallerScore(t *testing.T) {
 			ID: "myapp/svc.Server.CreateShipment", Package: "myapp/svc",
 			Name: "CreateShipment", Kind: "method",
 			Signature: "func (s *Server) CreateShipment(ctx, req) (*resp, error)",
-			File: "/svc/server.go", LineStart: 10, LineEnd: 30,
+			File:      "/svc/server.go", LineStart: 10, LineEnd: 30,
 		},
 		{
 			ID: "myapp/handler.HandleCreate", Package: "myapp/handler",
 			Name: "HandleCreate", Kind: "func",
 			Signature: "func HandleCreate()",
-			File: "/handler/create.go", LineStart: 1, LineEnd: 10,
+			File:      "/handler/create.go", LineStart: 1, LineEnd: 10,
 		},
 	})
 
@@ -1513,7 +1513,6 @@ func TestDedupGenerated_CollapsesCopies(t *testing.T) {
 	}
 }
 
-
 // --- parseRPCMessages ---
 
 func TestParseRPCMessages(t *testing.T) {
@@ -1548,13 +1547,13 @@ func TestGetCallers_FuzzyResolution(t *testing.T) {
 			ID: "myapp/svc.Server.CreateShipment", Package: "myapp/svc",
 			Name: "CreateShipment", Kind: "method",
 			Signature: "func (s *Server) CreateShipment(ctx, req) (*resp, error)",
-			File: "/svc/server.go", LineStart: 10, LineEnd: 30,
+			File:      "/svc/server.go", LineStart: 10, LineEnd: 30,
 		},
 		{
 			ID: "myapp/handler.HandleCreate", Package: "myapp/handler",
 			Name: "HandleCreate", Kind: "func",
 			Signature: "func HandleCreate()",
-			File: "/handler/create.go", LineStart: 1, LineEnd: 10,
+			File:      "/handler/create.go", LineStart: 1, LineEnd: 10,
 		},
 	})
 	if err := s.UpsertEdge(store.Edge{FromID: "myapp/handler.HandleCreate", ToID: "myapp/svc.Server.CreateShipment", Kind: "calls"}); err != nil {

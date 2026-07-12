@@ -629,6 +629,24 @@ func (s *Store) GetCallersFromBody(name string) ([]Symbol, error) {
 	return scanSymbols(rows)
 }
 
+// SearchBodies returns funcs/methods whose body contains the substring.
+// Used by field-level impact analysis to find direct struct-field access
+// and composite-literal initialization, which GetCallersFromBody's
+// call-shaped "name(" pattern misses.
+func (s *Store) SearchBodies(substr string, limit int) ([]Symbol, error) {
+	rows, err := s.db.Query(`
+		SELECT id, package, name, kind, signature, docstring, file, line_start, line_end, body
+		FROM symbols
+		WHERE (kind = 'func' OR kind = 'method') AND body LIKE ?
+		LIMIT ?
+	`, "%"+substr+"%", limit)
+	if err != nil {
+		return nil, fmt.Errorf("body search %q: %w", substr, err)
+	}
+	defer rows.Close()
+	return scanSymbols(rows)
+}
+
 // GetByName returns all symbols with the given name (any kind).
 func (s *Store) GetByName(name string) ([]Symbol, error) {
 	rows, err := s.db.Query(`

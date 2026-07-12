@@ -344,3 +344,93 @@ func TestQualifiedID(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestIndexMessageFields(t *testing.T) {
+	s := newTestStore(t)
+	dir := t.TempDir()
+	writeProto(t, dir, "leg.proto", `
+syntax = "proto3";
+package planning.v1;
+
+message ShipmentLeg {
+  // The resource name of this leg.
+  string name = 1;
+  // When pickup is scheduled.
+  optional google.protobuf.Timestamp pickup_time = 2 [(google.api.field_behavior) = REQUIRED];
+  repeated Stop stops = 3;
+  map<string, string> labels = 4;
+
+  // Nested message: its fields must NOT be attributed to ShipmentLeg.
+  message Stop {
+    string location = 1;
+  }
+
+  oneof assignment {
+    string vehicle = 5;
+    string driver = 6;
+  }
+
+  reserved 7, 8;
+  option deprecated = true;
+}
+
+enum LegState {
+  LEG_STATE_UNSPECIFIED = 0;
+  LEG_STATE_ACTIVE = 1;
+}
+`)
+
+	idx := New(Config{Dir: dir}, s)
+	if err := idx.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	want := map[string]string{
+		"planning.v1.ShipmentLeg.name":        "string name = 1",
+		"planning.v1.ShipmentLeg.pickup_time": "optional google.protobuf.Timestamp pickup_time = 2",
+		"planning.v1.ShipmentLeg.stops":       "repeated Stop stops = 3",
+		"planning.v1.ShipmentLeg.labels":      "map<string, string> labels = 4",
+		"planning.v1.ShipmentLeg.vehicle":     "string vehicle = 5", // oneof member
+		"planning.v1.ShipmentLeg.driver":      "string driver = 6",
+	}
+	for id, sig := range want {
+		sym, err := s.GetSymbol(id)
+		if err != nil {
+			t.Errorf("field %s not indexed: %v", id, err)
+			continue
+		}
+		if sym.Kind != "field" {
+			t.Errorf("%s kind = %q, want field", id, sym.Kind)
+		}
+		if sym.Signature != sig {
+			t.Errorf("%s signature = %q, want %q", id, sym.Signature, sig)
+		}
+	}
+
+	// Docstrings carry over.
+	pt, err := s.GetSymbol("planning.v1.ShipmentLeg.pickup_time")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pt.Docstring != "When pickup is scheduled." {
+		t.Errorf("docstring = %q", pt.Docstring)
+	}
+
+	// Nested-message fields belong to the nested message context — at
+	// minimum they must not be attributed to the outer message.
+	if _, err := s.GetSymbol("planning.v1.ShipmentLeg.location"); err == nil {
+		t.Error("nested message field wrongly attributed to outer message")
+	}
+
+	// Enum values are not fields.
+	if _, err := s.GetSymbol("planning.v1.LegState.LEG_STATE_ACTIVE"); err == nil {
+		t.Error("enum value should not be indexed as a field")
+	}
+
+	// reserved/option lines are not fields.
+	for _, id := range []string{"planning.v1.ShipmentLeg.deprecated", "planning.v1.ShipmentLeg.true"} {
+		if _, err := s.GetSymbol(id); err == nil {
+			t.Errorf("%s should not exist", id)
+		}
+	}
+}

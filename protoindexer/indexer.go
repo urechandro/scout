@@ -104,6 +104,12 @@ type parseState struct {
 	// for multi-line rpc signatures
 	rpcBuffer string
 	inRPC     bool
+	// oneof blocks nest fields one level deeper but the fields still
+	// belong to the enclosing message.
+	inOneof bool
+	// nested message/enum blocks also sit at depth 2; their contents are
+	// not fields of the enclosing message, so skip until the block closes.
+	inNested bool
 }
 
 func (idx *Indexer) indexFile(path string) (int, error) {
@@ -194,6 +200,8 @@ func (idx *Indexer) indexFile(path string) (int, error) {
 				state.inService = ""
 				state.inEnum = ""
 				state.blockSymIdx = len(syms) - 1
+			} else if opens > closes {
+				state.inNested = true
 			}
 			state.pendingDoc = nil
 			state.braceDepth += opens - closes
@@ -225,6 +233,8 @@ func (idx *Indexer) indexFile(path string) (int, error) {
 				state.inService = ""
 				state.inMessage = ""
 				state.blockSymIdx = len(syms) - 1
+			} else if opens > closes {
+				state.inNested = true
 			}
 			state.pendingDoc = nil
 			state.braceDepth += opens - closes
@@ -264,6 +274,35 @@ func (idx *Indexer) indexFile(path string) (int, error) {
 			}
 		}
 
+		// Field declaration inside a message — directly at depth 1, or at
+		// depth 2 inside a oneof (whose fields belong to the message).
+		if state.inMessage != "" && !state.inNested &&
+			(state.braceDepth == 1 || (state.braceDepth == 2 && state.inOneof)) {
+			if strings.HasPrefix(trimmed, "oneof ") {
+				state.inOneof = true
+				state.pendingDoc = nil
+				state.braceDepth += opens - closes
+				continue
+			}
+			if name, sig, ok := parseField(trimmed); ok {
+				syms = append(syms, store.Symbol{
+					ID:        qualifiedID(state.pkg, state.inMessage+"."+name),
+					Package:   state.pkg,
+					Name:      name,
+					Kind:      "field",
+					Signature: sig,
+					Docstring: doc,
+					File:      path,
+					LineStart: lineNum,
+					LineEnd:   lineNum,
+					Body:      fmt.Sprintf("/* %s:%d */", path, lineNum),
+				})
+				state.pendingDoc = nil
+				state.braceDepth += opens - closes
+				continue
+			}
+		}
+
 		// Reset pending doc on blank lines.
 		if trimmed == "" {
 			state.pendingDoc = nil
@@ -272,6 +311,10 @@ func (idx *Indexer) indexFile(path string) (int, error) {
 		// Update brace depth and reset enclosing context when blocks close.
 		prev := state.braceDepth
 		state.braceDepth += opens - closes
+		if state.braceDepth < prev && state.braceDepth <= 1 {
+			state.inOneof = false
+			state.inNested = false
+		}
 		if state.braceDepth < prev && state.braceDepth == 0 {
 			if state.blockSymIdx >= 0 && state.blockSymIdx < len(syms) {
 				syms[state.blockSymIdx].LineEnd = lineNum
@@ -299,6 +342,62 @@ func (idx *Indexer) indexFile(path string) (int, error) {
 	}
 
 	return len(syms), nil
+}
+
+// fieldKeywords are declaration starters that must never be parsed as a
+// field even though the line may contain "= <number>".
+var fieldKeywords = map[string]bool{
+	"option": true, "reserved": true, "extensions": true, "extend": true,
+	"rpc": true, "returns": true, "enum": true, "message": true,
+	"service": true, "oneof": true, "import": true, "package": true,
+	"group": true, "syntax": true, "edition": true,
+}
+
+// parseField parses a single-line proto field declaration inside a message:
+// "repeated ShipmentLeg legs = 2;", "optional string name = 1 [(...) = X];",
+// "map<string, string> labels = 4;". Returns ok=false for anything else
+// (options, reserved ranges, enum values, multi-line declarations).
+func parseField(line string) (name, signature string, ok bool) {
+	if !strings.HasSuffix(line, ";") {
+		return "", "", false
+	}
+	decl := strings.TrimSuffix(line, ";")
+	// Strip trailing field options: [(google.api.field_behavior) = REQUIRED].
+	if i := strings.Index(decl, "["); i >= 0 {
+		decl = decl[:i]
+	}
+	decl = strings.TrimSpace(decl)
+
+	eq := strings.LastIndex(decl, "=")
+	if eq < 0 {
+		return "", "", false
+	}
+	num := strings.TrimSpace(decl[eq+1:])
+	if num == "" || !isDigits(num) {
+		return "", "", false
+	}
+
+	left := strings.Fields(decl[:eq])
+	// Need at least a type and a name; a single token is an enum value.
+	if len(left) < 2 {
+		return "", "", false
+	}
+	if fieldKeywords[left[0]] {
+		return "", "", false
+	}
+	name = left[len(left)-1]
+	// Rejoin the type — map<string, string> splits across fields.
+	typ := strings.Join(left[:len(left)-1], " ")
+	return name, fmt.Sprintf("%s %s = %s", typ, name, num), true
+}
+
+func isDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func qualifiedID(pkg, name string) string {
