@@ -54,7 +54,10 @@ func (idx *Indexer) Run() error {
 		}
 		if d.IsDir() {
 			name := d.Name()
-			if path != idx.cfg.Dir && (strings.HasPrefix(name, ".") || name == "vendor") {
+			// node_modules: npm packages ship .proto test fixtures
+			// (protocol-buffers-schema alone adds ~60 junk field symbols).
+			// The watcher and Go indexer already skip it.
+			if path != idx.cfg.Dir && (strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules") {
 				return filepath.SkipDir
 			}
 			return nil
