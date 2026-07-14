@@ -629,6 +629,27 @@ func (s *Store) GetCallersFromBody(name string) ([]Symbol, error) {
 	return scanSymbols(rows)
 }
 
+// SearchByNameContains returns symbols whose name contains the substring
+// but is not exactly it (exact matches come from GetByName). Ordered by
+// name length so the closest artifacts rank first, then by ID for
+// determinism. Used to reach generated artifacts that embed an identifier
+// in a longer conventional name (TransportOrderSheet_ConfirmTransportOrder-
+// Document for RPC ConfirmTransportOrder).
+func (s *Store) SearchByNameContains(substr string, limit int) ([]Symbol, error) {
+	rows, err := s.db.Query(`
+		SELECT id, package, name, kind, signature, docstring, file, line_start, line_end, body
+		FROM symbols
+		WHERE name LIKE ? AND name != ?
+		ORDER BY length(name) ASC, id ASC
+		LIMIT ?
+	`, "%"+substr+"%", substr, limit)
+	if err != nil {
+		return nil, fmt.Errorf("name contains search %q: %w", substr, err)
+	}
+	defer rows.Close()
+	return scanSymbols(rows)
+}
+
 // SearchBodies returns funcs/methods whose body contains the substring.
 // Used by field-level impact analysis to find direct struct-field access
 // and composite-literal initialization, which GetCallersFromBody's
