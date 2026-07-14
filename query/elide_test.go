@@ -1,6 +1,7 @@
 package query
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/urechandro/scout/store"
@@ -84,12 +85,28 @@ func TestElidedIDRoundTrip(t *testing.T) {
 	if resp.Hint != "" {
 		t.Errorf("elided ID should resolve exactly, got hint %q", resp.Hint)
 	}
-	// And the response itself renders elided.
+	// And the response itself renders elided — including Package, which
+	// carries the same module prefix as the ID.
 	if resp.ID != "internal/auth.ValidateToken" {
 		t.Errorf("response ID = %q, want elided form", resp.ID)
 	}
 	if resp.File != "internal/auth/auth.go" {
 		t.Errorf("response File = %q, want root-relative form", resp.File)
+	}
+	if resp.Package != "internal/auth" {
+		t.Errorf("response Package = %q, want elided form", resp.Package)
+	}
+
+	// A fuzzy lookup's hint must not leak the full-length resolved ID.
+	fuzzy, err := e.GetBody("ValidateToken")
+	if err != nil {
+		t.Fatalf("GetBody(fuzzy): %v", err)
+	}
+	if !strings.Contains(fuzzy.Hint, `resolved to "internal/auth.ValidateToken"`) {
+		t.Errorf("fuzzy hint should show the elided ID, got %q", fuzzy.Hint)
+	}
+	if strings.Contains(fuzzy.Hint, "github.com/acme") {
+		t.Errorf("fuzzy hint leaked full ID: %q", fuzzy.Hint)
 	}
 
 	// resolveSymbolID must accept both forms.
