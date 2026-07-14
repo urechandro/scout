@@ -564,6 +564,7 @@ type BodyResponse struct {
 // If the exact ID is not found, it falls back to suffix and name matching
 // so that guessed or partial IDs still resolve.
 func (e *Engine) GetBody(symbolID string) (*BodyResponse, error) {
+	requested := symbolID
 	symbolID = e.expandID(symbolID)
 	sym, candidates, err := e.store.FuzzyGetSymbol(symbolID)
 	if err != nil {
@@ -596,15 +597,19 @@ func (e *Engine) GetBody(symbolID string) (*BodyResponse, error) {
 			resp.OtherIDs = append(resp.OtherIDs, c.ID)
 		}
 	} else if sym.ID != symbolID {
-		resp.Hint = fmt.Sprintf("Fuzzy match: requested %q, resolved to %q", symbolID, sym.ID)
+		resp.Hint = fmt.Sprintf("Fuzzy match: requested %q, resolved to %q", requested, e.shortID(sym.ID))
 	}
 
 	resp.References = e.extractReferences(sym)
 
 	// Elide last: readLines/readDecl above need the absolute path, and
-	// extractReferences needs the full ID to skip self.
+	// extractReferences needs the full ID to skip self. Package is a Go
+	// package path carrying the same module prefix as the ID — the one
+	// unelided field here is where models pick up full-length IDs to echo
+	// back (seen in the 2026-07-13 cross-repo trace).
 	sym.ID = e.shortID(sym.ID)
 	sym.File = e.shortFile(sym.File)
+	sym.Package = e.shortID(sym.Package)
 	for i := range resp.OtherIDs {
 		resp.OtherIDs[i] = e.shortID(resp.OtherIDs[i])
 	}
