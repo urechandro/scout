@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/urechandro/scout/indexer"
 	"github.com/urechandro/scout/protoindexer"
@@ -69,6 +70,7 @@ func TestGoldenFixtures(t *testing.T) {
 	}
 
 	eng := setupIndex(t)
+	var metrics retrievalMetrics
 
 	fixtures, err := LoadFixtures("fixtures.yaml")
 	if err != nil {
@@ -80,7 +82,9 @@ func TestGoldenFixtures(t *testing.T) {
 
 	for _, f := range fixtures {
 		t.Run(f.Name, func(t *testing.T) {
+			started := time.Now()
 			result, err := RunFixture(eng, f)
+			elapsed := time.Since(started)
 
 			if f.WantError != "" {
 				if err == nil {
@@ -102,6 +106,7 @@ func TestGoldenFixtures(t *testing.T) {
 			}
 
 			t.Logf("tool=%s bytes=%d", f.Tool, len(data))
+			metrics.record(result, len(data), elapsed)
 
 			if f.MaxBytes > 0 && len(data) > f.MaxBytes {
 				t.Errorf("response %d bytes exceeds max_bytes %d", len(data), f.MaxBytes)
@@ -118,4 +123,5 @@ func TestGoldenFixtures(t *testing.T) {
 			}
 		})
 	}
+	metrics.log(t, "general retrieval")
 }

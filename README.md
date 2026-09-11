@@ -59,11 +59,12 @@ for unchanged symbols across the reset, so re-running `scout index` doesn't
 re-embed the whole corpus. `scout serve --watch` also re-embeds invalidated
 symbols after each debounced reindex.
 
-> **Status:** schema, config, init prompt, indexer integration, and
-> watcher-driven re-embedding are wired. The query phase that actually
-> consults vectors at retrieval time lands in the next change. Until then,
-> embeddings are populated but `get_relevant_context` still uses exact-name
-> + FTS only.
+> **Status:** semantic retrieval is implemented end to end. For discovery
+> queries, `get_relevant_context` combines exact-name lookup and FTS candidates
+> with a query embedding and cosine search over the stored vectors. Precise
+> symbol queries deliberately skip the semantic phase. If Ollama is unavailable,
+> times out, or returns incompatible vectors, retrieval continues with the
+> deterministic exact-name and FTS path.
 
 ## Commands
 
