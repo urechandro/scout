@@ -9,7 +9,7 @@
 # for budget (the displacement axis). FTS-miss fixtures measure pure recall
 # the vector layer adds.
 #
-# Per-fixture FTS-only behavior (as of 2026-06-14, on scout's own index
+# Per-fixture FTS-only behavior (as of 2026-09-11, on scout's own index
 # with nomic-embed-text vectors). Useful for tracking which axis a tuning
 # change moves:
 #   FTS-only HIT  : query_classifier, dirty_signal, source_first,
@@ -20,8 +20,11 @@
 #
 # Current A/B headline (15 fixtures, ±6.7pp per-fixture noise):
 #   FTS-only baseline : 9 / 15 (60%)
-#   Phase 3 semantic  : 13 / 15 (87%)  — known: log_bridge displaced,
-#                                        health_check semantic-gap
+#   Phase 3 semantic  : 11 / 15 (73%)
+#   Semantic-only wins: file_watcher, proto_link, topk_picker, health_check,
+#                       graph_walk
+#   Semantic regressions: log_bridge, blast_radius, duplicate_killer
+#   Shared miss: unembedded_picker
 #
 # These tests are skipped by default. Set SCOUT_OLLAMA_HOST (e.g.
 # http://localhost:11434) and SCOUT_OLLAMA_MODEL (e.g. nomic-embed-text) to

@@ -1,0 +1,35 @@
+#!/bin/sh
+set -eu
+
+# Keep all Go writes outside the user's home directory. Callers may override
+# SCOUT_BASELINE_CACHE to retain downloaded modules across runs.
+cache_root="${SCOUT_BASELINE_CACHE:-${TMPDIR:-/tmp}/scout-baseline-cache}"
+export GOPATH="$cache_root/gopath"
+export GOMODCACHE="$cache_root/gomodcache"
+export GOCACHE="$cache_root/gocache"
+export GOTMPDIR="$cache_root/tmp"
+
+mkdir -p "$GOPATH" "$GOMODCACHE" "$GOCACHE" "$GOTMPDIR"
+
+echo "Scout retrieval baseline"
+echo "commit: $(git rev-parse HEAD)"
+echo "go: $(go version)"
+echo "general fixtures: $(grep -c '^- name:' eval/fixtures.yaml)"
+echo "semantic fixtures: $(grep -c '^- name:' eval/semantic_fixtures.yaml)"
+
+echo ""
+echo "Complete test suite"
+go test ./... -count=1
+
+echo ""
+echo "Exact/FTS evaluation"
+go test ./eval -run 'TestGoldenFixtures|TestSemanticFixturesBaseline' -count=1 -v
+
+if [ -n "${SCOUT_OLLAMA_HOST:-}" ] && [ -n "${SCOUT_OLLAMA_MODEL:-}" ]; then
+  echo ""
+  echo "Semantic evaluation"
+  go test ./eval -run '^TestSemanticFixtures$' -count=1 -v
+else
+  echo ""
+  echo "Semantic evaluation skipped: set SCOUT_OLLAMA_HOST and SCOUT_OLLAMA_MODEL."
+fi

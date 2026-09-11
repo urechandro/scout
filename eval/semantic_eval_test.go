@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/urechandro/scout/embedder"
 	"github.com/urechandro/scout/indexer"
@@ -54,6 +55,8 @@ func TestSemanticFixtures(t *testing.T) {
 	}
 
 	eng := setupSemanticIndex(t, host, model)
+	var metrics retrievalMetrics
+	hits := 0
 
 	fixtures, err := LoadFixtures("semantic_fixtures.yaml")
 	if err != nil {
@@ -65,7 +68,9 @@ func TestSemanticFixtures(t *testing.T) {
 
 	for _, f := range fixtures {
 		t.Run(f.Name, func(t *testing.T) {
+			started := time.Now()
 			result, err := RunFixture(eng, f)
+			elapsed := time.Since(started)
 			if err != nil {
 				t.Fatalf("%s: %v", f.Tool, err)
 			}
@@ -74,13 +79,19 @@ func TestSemanticFixtures(t *testing.T) {
 				t.Fatalf("marshal: %v", mErr)
 			}
 			t.Logf("tool=%s bytes=%d", f.Tool, len(data))
+			metrics.record(result, len(data), elapsed)
 			if f.MaxBytes > 0 && len(data) > f.MaxBytes {
 				t.Errorf("response %d bytes exceeds max_bytes %d", len(data), f.MaxBytes)
 			}
+			fixtureHit := true
 			for _, want := range f.MustInclude {
 				if !bytes.Contains(data, []byte(want)) {
+					fixtureHit = false
 					t.Errorf("must_include not in response: %q", want)
 				}
+			}
+			if fixtureHit {
+				hits++
 			}
 			for _, unwanted := range f.MustNotInclude {
 				if bytes.Contains(data, []byte(unwanted)) {
@@ -89,6 +100,8 @@ func TestSemanticFixtures(t *testing.T) {
 			}
 		})
 	}
+	t.Logf("semantic hit rate: %d/%d (%.0f%%)", hits, len(fixtures), 100*float64(hits)/float64(len(fixtures)))
+	metrics.log(t, "semantic retrieval")
 }
 
 // TestSemanticFixturesBaseline runs the same meaning-based fixtures against
@@ -104,6 +117,7 @@ func TestSemanticFixturesBaseline(t *testing.T) {
 		t.Skip("baseline fixtures index scout's source — skipping under -short")
 	}
 	eng := setupIndex(t)
+	var metrics retrievalMetrics
 	fixtures, err := LoadFixtures("semantic_fixtures.yaml")
 	if err != nil {
 		t.Fatalf("load semantic fixtures: %v", err)
@@ -111,7 +125,9 @@ func TestSemanticFixturesBaseline(t *testing.T) {
 	hits := 0
 	for _, f := range fixtures {
 		t.Run(f.Name, func(t *testing.T) {
+			started := time.Now()
 			result, err := RunFixture(eng, f)
+			elapsed := time.Since(started)
 			if err != nil {
 				t.Fatalf("%s: %v", f.Tool, err)
 			}
@@ -119,6 +135,7 @@ func TestSemanticFixturesBaseline(t *testing.T) {
 			if mErr != nil {
 				t.Fatalf("marshal: %v", mErr)
 			}
+			metrics.record(result, len(data), elapsed)
 			ok := true
 			for _, want := range f.MustInclude {
 				if !bytes.Contains(data, []byte(want)) {
@@ -133,6 +150,7 @@ func TestSemanticFixturesBaseline(t *testing.T) {
 		})
 	}
 	t.Logf("baseline hit rate: %d/%d (%.0f%%)", hits, len(fixtures), 100*float64(hits)/float64(len(fixtures)))
+	metrics.log(t, "FTS-only semantic fixtures")
 }
 
 // setupSemanticIndex builds an index of scout's own source, runs the embedder
