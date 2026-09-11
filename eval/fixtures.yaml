@@ -33,6 +33,47 @@
     - "\"id\":"
   max_bytes: 1500
 
+# --- query-class boundaries ---
+
+- name: precise_punctuation_is_ignored
+  tool: get_relevant_context
+  args:
+    query: classifyQuery()
+  must_include:
+    - github.com/urechandro/scout/query.classifyQuery
+  max_bytes: 4000
+
+- name: precise_dotted_snake_case_field
+  tool: get_relevant_context
+  args:
+    query: scouteval.v1.ShipmentLeg.scheduled_pickup_time
+  must_include:
+    - scouteval.v1.ShipmentLeg.scheduled_pickup_time
+  max_bytes: 4000
+
+- name: lowercase_word_remains_discovery
+  tool: get_relevant_context
+  args:
+    query: watcher
+  must_include:
+    - github.com/urechandro/scout/indexer.Watcher
+
+- name: multiple_symbols_remain_discovery
+  tool: get_relevant_context
+  args:
+    query: classifyQuery buildFTSQuery
+  must_include:
+    - github.com/urechandro/scout/query.classifyQuery
+    - github.com/urechandro/scout/query.buildFTSQuery
+
+- name: stop_words_only_return_empty
+  tool: get_relevant_context
+  args:
+    query: how do i make it
+  must_not_include:
+    - "\"id\":"
+  max_bytes: 1500
+
 - name: get_flow_accepts_fuzzy_id
   tool: get_flow
   args:

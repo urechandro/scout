@@ -51,6 +51,8 @@ func TestClassifyQuery(t *testing.T) {
 		// Precise: snake_case identifiers (proto fields, DB columns)
 		{"reported_start_time", queryPrecise},
 		{"Activity.reported_start_time", queryPrecise},
+		{"(grpc.Dial)", queryPrecise},
+		{"CreateShipmentLeg()", queryPrecise},
 
 		// Discovery: multi-word natural language
 		{"how does auth work", queryDiscovery},
@@ -61,6 +63,11 @@ func TestClassifyQuery(t *testing.T) {
 		// Discovery: single plain word (no compound/dot)
 		{"auth", queryDiscovery},
 		{"shipment", queryDiscovery},
+		{"auth.", queryDiscovery},
+		{"auth.config", queryDiscovery},
+		{"foo..Bar", queryDiscovery},
+		{"...", queryDiscovery},
+		{"how do i make it", queryDiscovery},
 
 		// Edge: single uppercase word without case transition
 		{"API", queryDiscovery},
@@ -75,6 +82,36 @@ func TestClassifyQuery(t *testing.T) {
 				t.Errorf("classifyQuery(%q) = %s, want %s", tt.task, label[got], label[tt.want])
 			}
 		})
+	}
+}
+
+func TestNormalizeQueryToken(t *testing.T) {
+	tests := map[string]string{
+		"auth.":               "auth",
+		"(grpc.Dial)":         "grpc.Dial",
+		"CreateShipmentLeg()": "CreateShipmentLeg",
+		"...":                 "",
+	}
+	for input, want := range tests {
+		if got := normalizeQueryToken(input); got != want {
+			t.Errorf("normalizeQueryToken(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestIsDottedIdent(t *testing.T) {
+	tests := map[string]bool{
+		"grpc.Dial":                    true,
+		"Activity.reported_start_time": true,
+		"auth.config":                  false,
+		"foo..Bar":                     false,
+		"foo.":                         false,
+		".Bar":                         false,
+	}
+	for input, want := range tests {
+		if got := isDottedIdent(input); got != want {
+			t.Errorf("isDottedIdent(%q) = %v, want %v", input, got, want)
+		}
 	}
 }
 

@@ -157,16 +157,50 @@ func classifyQuery(task string) queryType {
 	if len(fields) != 1 {
 		return queryDiscovery
 	}
-	w := strings.TrimFunc(fields[0], func(r rune) bool {
-		return !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '.')
-	})
+	w := normalizeQueryToken(fields[0])
 	if isCompoundIdent(w) {
 		return queryPrecise
 	}
-	if strings.Contains(w, ".") {
+	if isDottedIdent(w) {
 		return queryPrecise
 	}
 	return queryDiscovery
+}
+
+// normalizeQueryToken removes sentence punctuation while retaining dots that
+// separate identifier segments. In particular, "auth." must behave like
+// "auth", not like a dotted identifier lookup.
+func normalizeQueryToken(token string) string {
+	return strings.TrimFunc(token, func(r rune) bool {
+		return !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_')
+	})
+}
+
+// isDottedIdent reports whether every segment in a dotted name is non-empty
+// and identifier-shaped. The compound requirement keeps plain prose such as
+// "auth.config" in discovery while recognizing package.Symbol and
+// Message.snake_case_field as precise lookups.
+func isDottedIdent(s string) bool {
+	parts := strings.Split(s, ".")
+	if len(parts) < 2 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" || !isIdentifierToken(part) {
+			return false
+		}
+	}
+	last := parts[len(parts)-1]
+	return isCompoundIdent(last) || (last[0] >= 'A' && last[0] <= 'Z')
+}
+
+func isIdentifierToken(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if !isAlnumByte(s[i]) && s[i] != '_' {
+			return false
+		}
+	}
+	return s != ""
 }
 
 // GetRelevantContext is the primary MCP tool entry point.
@@ -2664,10 +2698,8 @@ func extractCompoundIdents(task string) []string {
 	var idents []string
 	seen := make(map[string]bool)
 	for _, w := range strings.Fields(task) {
-		// Strip punctuation from edges.
-		w = strings.TrimFunc(w, func(r rune) bool {
-			return !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '.')
-		})
+		// Strip sentence punctuation from edges while preserving internal dots.
+		w = normalizeQueryToken(w)
 		if isCompoundIdent(w) && !seen[w] {
 			seen[w] = true
 			idents = append(idents, w)
@@ -2713,9 +2745,7 @@ func extractCompoundParts(task string) []string {
 func queryWords(task string) []string {
 	var out []string
 	for _, w := range strings.Fields(task) {
-		w = strings.TrimFunc(w, func(r rune) bool {
-			return !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '.')
-		})
+		w = normalizeQueryToken(w)
 		if len(w) >= 3 {
 			out = append(out, w)
 		}
