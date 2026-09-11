@@ -23,7 +23,9 @@ type Fixture struct {
 	Tool           string         `yaml:"tool"`
 	Args           map[string]any `yaml:"args"`
 	MustInclude    []string       `yaml:"must_include,omitempty"`
+	ShouldInclude  []string       `yaml:"should_include,omitempty"`
 	MustNotInclude []string       `yaml:"must_not_include,omitempty"`
+	MaxRank        map[string]int `yaml:"max_rank,omitempty"`
 	MaxBytes       int            `yaml:"max_bytes,omitempty"`
 	WantError      string         `yaml:"want_error,omitempty"`
 }

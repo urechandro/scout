@@ -55,7 +55,9 @@ func TestSemanticFixtures(t *testing.T) {
 	}
 
 	eng := setupSemanticIndex(t, host, model)
+	baselineEng := setupIndex(t)
 	var metrics retrievalMetrics
+	var delta semanticDelta
 	hits := 0
 
 	fixtures, err := LoadFixtures("semantic_fixtures.yaml")
@@ -80,6 +82,12 @@ func TestSemanticFixtures(t *testing.T) {
 			}
 			t.Logf("tool=%s bytes=%d", f.Tool, len(data))
 			metrics.record(result, len(data), elapsed)
+			metrics.recordRanking(f, result)
+			baselineResult, baselineErr := RunFixture(baselineEng, f)
+			if baselineErr != nil {
+				t.Fatalf("FTS-only comparison: %v", baselineErr)
+			}
+			delta.record(bestTargetRank(f, baselineResult), bestTargetRank(f, result))
 			if f.MaxBytes > 0 && len(data) > f.MaxBytes {
 				t.Errorf("response %d bytes exceeds max_bytes %d", len(data), f.MaxBytes)
 			}
@@ -98,10 +106,19 @@ func TestSemanticFixtures(t *testing.T) {
 					t.Errorf("must_not_include in response: %q", unwanted)
 				}
 			}
+			if resp, ok := result.(*query.ContextResponse); ok {
+				for target, maxRank := range f.MaxRank {
+					rank := symbolRank(resp, target)
+					if rank == 0 || rank > maxRank {
+						t.Errorf("max_rank %q: got rank %d, want 1..%d", target, rank, maxRank)
+					}
+				}
+			}
 		})
 	}
 	t.Logf("semantic hit rate: %d/%d (%.0f%%)", hits, len(fixtures), 100*float64(hits)/float64(len(fixtures)))
 	metrics.log(t, "semantic retrieval")
+	delta.log(t)
 }
 
 // TestSemanticFixturesBaseline runs the same meaning-based fixtures against
@@ -136,6 +153,7 @@ func TestSemanticFixturesBaseline(t *testing.T) {
 				t.Fatalf("marshal: %v", mErr)
 			}
 			metrics.record(result, len(data), elapsed)
+			metrics.recordRanking(f, result)
 			ok := true
 			for _, want := range f.MustInclude {
 				if !bytes.Contains(data, []byte(want)) {

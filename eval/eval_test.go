@@ -107,6 +107,7 @@ func TestGoldenFixtures(t *testing.T) {
 
 			t.Logf("tool=%s bytes=%d", f.Tool, len(data))
 			metrics.record(result, len(data), elapsed)
+			metrics.recordRanking(f, result)
 
 			if f.MaxBytes > 0 && len(data) > f.MaxBytes {
 				t.Errorf("response %d bytes exceeds max_bytes %d", len(data), f.MaxBytes)
@@ -119,6 +120,14 @@ func TestGoldenFixtures(t *testing.T) {
 			for _, unwanted := range f.MustNotInclude {
 				if bytes.Contains(data, []byte(unwanted)) {
 					t.Errorf("must_not_include in response: %q", unwanted)
+				}
+			}
+			if resp, ok := result.(*query.ContextResponse); ok {
+				for target, maxRank := range f.MaxRank {
+					rank := symbolRank(resp, target)
+					if rank == 0 || rank > maxRank {
+						t.Errorf("max_rank %q: got rank %d, want 1..%d", target, rank, maxRank)
+					}
 				}
 			}
 		})
