@@ -72,3 +72,26 @@ func TestUpdateCodexConfigCreatesProjectConfig(t *testing.T) {
 		t.Fatalf("unexpected generated config:\n%s", content)
 	}
 }
+
+func TestUpdateAgentGuidanceMigratesLegacyMarkers(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "CLAUDE.md")
+	original := "# Keep this\n\n" + legacyScoutStart + "\nold guidance\n" + legacyScoutEnd + "\n\n# Keep this too\n"
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := updateAgentGuidance(root, agentClaude, initTestLogger{}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if strings.Contains(content, "old guidance") || strings.Contains(content, legacyScoutStart) {
+		t.Fatalf("legacy block was not migrated:\n%s", content)
+	}
+	if !strings.Contains(content, claudeMDBlock) || !strings.Contains(content, "# Keep this too") {
+		t.Fatalf("managed or user content missing:\n%s", content)
+	}
+}
