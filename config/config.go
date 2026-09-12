@@ -42,6 +42,16 @@ type Config struct {
 	// Nil means semantic search is disabled — scout falls back to exact
 	// name lookup + FTS only, the pre-semantic behavior.
 	Embedder *EmbedderConfig `yaml:"embedder,omitempty"`
+	// Navigation controls optional read-observation and future enforcement.
+	Navigation *NavigationConfig `yaml:"navigation,omitempty"`
+}
+
+// NavigationConfig controls broad-source-read classification. Enforcement is
+// intentionally opt-in; observe is the safe default when configured.
+type NavigationConfig struct {
+	Enforcement          string `yaml:"enforcement,omitempty"`
+	MaxWholeFileLines    int    `yaml:"max_whole_file_lines,omitempty"`
+	MaxTargetedReadLines int    `yaml:"max_targeted_read_lines,omitempty"`
 }
 
 // EmbedderConfig points scout at an embedding service.

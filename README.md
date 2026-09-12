@@ -35,6 +35,19 @@ For Codex CLI, use `scout init --agent codex --yes`. In addition to the shared
 unrelated instruction content are preserved. Use `--agent none` for MCP-only
 setup.
 
+Navigation observation can be configured in `.scout/config.yaml` while hook
+enforcement remains opt-in:
+
+```yaml
+navigation:
+  enforcement: observe
+  max_whole_file_lines: 350
+  max_targeted_read_lines: 200
+```
+
+Observe mode records proposed decisions but never blocks the underlying read.
+Generated files, assets, and Scout/MCP operations are exempt.
+
 Pass `--yes` / `-y` to skip the TUI and accept all defaults (CI-safe, semantic search off).
 
 ### Semantic search (optional)
