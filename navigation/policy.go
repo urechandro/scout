@@ -23,16 +23,18 @@ type ReadEvent struct {
 	StartLine     int    `json:"start_line,omitempty"`
 	EndLine       int    `json:"end_line,omitempty"`
 	CommandSource string `json:"command_source,omitempty"`
+	Override      bool   `json:"override,omitempty"`
 }
 
 // Decision records the proposed policy outcome and why it was chosen.
 type Decision struct {
-	Event    ReadEvent `json:"event"`
-	Class    string    `json:"class"`
-	Proposed string    `json:"proposed"`
-	Allowed  bool      `json:"allowed"`
-	Reason   string    `json:"reason"`
-	Guidance string    `json:"guidance,omitempty"`
+	Event      ReadEvent `json:"event"`
+	Class      string    `json:"class"`
+	Proposed   string    `json:"proposed"`
+	Allowed    bool      `json:"allowed"`
+	Overridden bool      `json:"overridden,omitempty"`
+	Reason     string    `json:"reason"`
+	Guidance   string    `json:"guidance,omitempty"`
 }
 
 // Policy is a read classifier configuration.
@@ -81,7 +83,7 @@ func (p Policy) Evaluate(event ReadEvent) Decision {
 		}
 		if lines > p.MaxTargetedLines {
 			d.Proposed, d.Reason = "block", "Targeted source range exceeds configured line limit"
-			d.Allowed = p.Enforcement != EnforcementBlock
+			d.applyEnforcement(p, event.Override)
 			d.setGuidance()
 		}
 		return d
@@ -89,7 +91,7 @@ func (p Policy) Evaluate(event ReadEvent) Decision {
 	d.Class = "whole-source"
 	if lines > p.MaxWholeFileLines {
 		d.Proposed, d.Reason = "block", "Whole source file exceeds configured line limit"
-		d.Allowed = p.Enforcement != EnforcementBlock
+		d.applyEnforcement(p, event.Override)
 		d.setGuidance()
 	}
 	return d
@@ -99,6 +101,12 @@ func (d *Decision) setGuidance() {
 	if !d.Allowed {
 		d.Guidance = BlockGuidance
 	}
+}
+
+func (d *Decision) applyEnforcement(p Policy, override bool) {
+	d.Allowed = p.Enforcement != EnforcementBlock || override
+	d.Overridden = override && p.Enforcement == EnforcementBlock
+	d.setGuidance()
 }
 
 func isExempt(e ReadEvent) bool {

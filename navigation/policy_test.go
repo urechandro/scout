@@ -23,6 +23,13 @@ func TestEvaluateObserveModeOmitsBlockingGuidance(t *testing.T) {
 	}
 }
 
+func TestEvaluateBlockModeHonorsExplicitOverride(t *testing.T) {
+	d := (Policy{Enforcement: EnforcementBlock}).Evaluate(ReadEvent{File: "pkg/large.go", FileLines: 500, Override: true})
+	if d.Proposed != "block" || !d.Allowed || !d.Overridden || d.Guidance != "" {
+		t.Fatalf("unexpected decision: %+v", d)
+	}
+}
+
 func TestEvaluateBlockModeKeepsExemptReadsAllowed(t *testing.T) {
 	d := (Policy{Enforcement: EnforcementBlock}).Evaluate(ReadEvent{File: "gen/api.pb.go", FileLines: 500})
 	if d.Class != "generated" || !d.Allowed {
