@@ -119,9 +119,10 @@ Run `scout <command> --help` for flags.
 
 `scout doctor --root /your/project` emits machine-readable JSON checks for the
 repository root, recognized language manifests, the conventional
-`.scout/index.db` schema, and optional navigation telemetry. Missing optional
-state is reported as a warning; unreadable or malformed state is reported as an
-error.
+`.scout/index.db` schema, local Ollama/MCP/client configuration, watcher state,
+and optional navigation telemetry. Missing optional state is reported as a
+warning; unreadable or malformed state is reported as an error. Checks are
+offline and do not contact Ollama or client processes.
 
 ---
 
