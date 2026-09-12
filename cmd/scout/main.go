@@ -1,4 +1,4 @@
-// Command scout — fast, token-efficient codebase navigation for Claude Code.
+// Command scout — fast, token-efficient codebase navigation for MCP clients.
 package main
 
 import (
@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-const usage = `scout — fast, token-efficient codebase navigation for Claude Code
+const usage = `scout — fast, token-efficient codebase navigation for MCP clients
 
 Usage:
   scout <command> [flags]

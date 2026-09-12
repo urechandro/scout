@@ -1,7 +1,7 @@
 # scout
 
 MCP server for fast, token-efficient navigation of a Go and TypeScript codebase.
-Gives Claude Code structured symbol lookup instead of broad file reads.
+Gives MCP-compatible agents structured symbol lookup instead of broad file reads.
 
 ## Install
 
@@ -27,7 +27,7 @@ scout init
 - Optionally enables semantic search via [Ollama](https://ollama.com/) — see below
 - Runs a full index
 
-Then reload Claude Code to pick up the MCP server.
+Then reload your MCP client to pick up the server.
 
 For Codex CLI, use `scout init --agent codex --yes`. In addition to the shared
 `.mcp.json`, this writes a managed `[mcp_servers.scout]` entry to the project
@@ -128,6 +128,15 @@ offline and do not contact Ollama or client processes.
 Applications embedding Scout can opt into session telemetry with the
 `telemetry` package. It appends one JSON object per call and summarizes
 success, failure, response bytes, and estimated tokens for local benchmarks.
+To inspect a recorded run:
+
+```sh
+scout session-stats --path .scout/session.jsonl
+```
+
+Compare runs using the same task set and report total calls, failures, response
+bytes, and estimated tokens; keep semantic retrieval and Ollama disabled unless
+the benchmark explicitly measures them.
 
 ---
 
@@ -309,7 +318,7 @@ structure, and example symbol IDs. The indexer loads it automatically on every r
 
 ---
 
-## Tools exposed to Claude Code
+## Tools exposed to MCP clients
 
 | Tool | Purpose |
 |---|---|
