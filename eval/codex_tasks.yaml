@@ -1,0 +1,62 @@
+# Fixed voluntary-navigation benchmark tasks. Run each task in control and
+# Scout modes; record the resulting session metrics in docs/evaluation.
+- id: explain-mcp-lifecycle
+  category: explanation
+  prompt: Explain how the MCP server starts, serves one request, and shuts down.
+- id: explain-watcher-refresh
+  category: explanation
+  prompt: Explain how a changed Go file reaches the watcher reindex path.
+- id: explain-vector-fallback
+  category: explanation
+  prompt: Explain what happens when semantic query embedding fails.
+- id: explain-token-budget
+  category: explanation
+  prompt: Explain how get_relevant_context enforces its token budget.
+- id: explain-proto-link
+  category: explanation
+  prompt: Explain how proto symbols are linked to generated Go symbols.
+- id: locate-mcp-error
+  category: bug-localization
+  prompt: Locate where malformed MCP tool arguments are rejected and propose a fix.
+- id: locate-stale-vectors
+  category: bug-localization
+  prompt: Locate the cause of stale vectors after an incremental reindex.
+- id: locate-ts-refresh
+  category: bug-localization
+  prompt: Locate why a TypeScript change might not trigger a refresh.
+- id: locate-duplicate-results
+  category: bug-localization
+  prompt: Locate where duplicate retrieval candidates are removed.
+- id: locate-budget-regression
+  category: bug-localization
+  prompt: Locate a regression that could trim an exact match from the response.
+- id: pattern-new-tool
+  category: implementation-pattern
+  prompt: Add a read-only MCP tool following the closest existing tool pattern.
+- id: pattern-indexer-option
+  category: implementation-pattern
+  prompt: Add an indexer option following the existing configuration pattern.
+- id: pattern-store-migration
+  category: implementation-pattern
+  prompt: Add a store schema migration following existing migrations.
+- id: pattern-eval-fixture
+  category: implementation-pattern
+  prompt: Add a ranked retrieval fixture and its focused test.
+- id: blast-radius-signature
+  category: refactor
+  prompt: Assess the blast radius of changing a public query response field.
+- id: blast-radius-indexer
+  category: refactor
+  prompt: Assess the impact of changing the indexer's symbol identity format.
+- id: refactor-dedup
+  category: refactor
+  prompt: Refactor candidate deduplication without changing retrieval results.
+- id: cross-layer-embedding
+  category: cross-layer
+  prompt: Trace embedding configuration from init through indexing to querying.
+- id: cross-layer-watcher
+  category: cross-layer
+  prompt: Trace a file save from fsnotify through reindex and retrieval refresh.
+- id: cross-layer-proto
+  category: cross-layer
+  prompt: Trace a proto RPC from indexing through graph edges to query output.
