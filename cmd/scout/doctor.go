@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/urechandro/scout/config"
 	"github.com/urechandro/scout/navigation"
@@ -33,6 +34,7 @@ func cmdDoctor(args []string) {
 func runDoctor(root string, out io.Writer) error {
 	checks := []doctorCheck{}
 	checks = append(checks, checkRoot(root))
+	checks = append(checks, checkLanguageTooling(root))
 	checks = append(checks, checkDatabase(filepath.Join(root, config.Dir, "index.db")))
 	cfg, err := config.Load(root)
 	if err != nil {
@@ -70,6 +72,20 @@ func checkRoot(root string) doctorCheck {
 		return doctorCheck{Name: "repository.root", Status: "error", Detail: "path is not a directory"}
 	}
 	return doctorCheck{Name: "repository.root", Status: "ok", Detail: root}
+}
+
+func checkLanguageTooling(root string) doctorCheck {
+	markers := []string{"go.mod", "package.json", "pyproject.toml", "Cargo.toml", "pom.xml", "requirements.txt"}
+	found := make([]string, 0, len(markers))
+	for _, marker := range markers {
+		if _, err := os.Stat(filepath.Join(root, marker)); err == nil {
+			found = append(found, marker)
+		}
+	}
+	if len(found) == 0 {
+		return doctorCheck{Name: "language.tooling", Status: "warn", Detail: "no recognized project manifest found"}
+	}
+	return doctorCheck{Name: "language.tooling", Status: "ok", Detail: strings.Join(found, ", ")}
 }
 
 func checkDatabase(path string) doctorCheck {

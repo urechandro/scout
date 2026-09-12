@@ -118,9 +118,10 @@ scout doctor     Check repository, index, and navigation telemetry health
 Run `scout <command> --help` for flags.
 
 `scout doctor --root /your/project` emits machine-readable JSON checks for the
-repository root, the conventional `.scout/index.db` schema, and optional
-navigation telemetry. Missing optional telemetry is reported as a warning;
-unreadable or malformed state is reported as an error.
+repository root, recognized language manifests, the conventional
+`.scout/index.db` schema, and optional navigation telemetry. Missing optional
+state is reported as a warning; unreadable or malformed state is reported as an
+error.
 
 ---
 

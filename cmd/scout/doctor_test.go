@@ -50,3 +50,17 @@ func TestRunDoctorReportsRepositoryAndSchema(t *testing.T) {
 		t.Fatalf("statuses = %#v", statuses)
 	}
 }
+
+func TestRunDoctorReportsLanguageManifest(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"name":"example"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := runDoctor(root, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"name":"language.tooling"`) || !strings.Contains(out.String(), `"status":"ok"`) {
+		t.Fatalf("output = %s", out.String())
+	}
+}
