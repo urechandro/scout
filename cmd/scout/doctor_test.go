@@ -64,3 +64,22 @@ func TestRunDoctorReportsLanguageManifest(t *testing.T) {
 		t.Fatalf("output = %s", out.String())
 	}
 }
+
+func TestRunDoctorReportsMCPAndClientGuidance(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".mcp.json"), []byte(`{"mcpServers":{"scout":{"args":["--watch"]}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("# Scout\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := runDoctor(root, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{`"name":"mcp.config"`, `"name":"client.guidance"`, `"name":"watcher.config"`} {
+		if !strings.Contains(out.String(), name) {
+			t.Fatalf("missing %s in %s", name, out.String())
+		}
+	}
+}

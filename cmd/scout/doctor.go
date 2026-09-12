@@ -41,6 +41,10 @@ func runDoctor(root string, out io.Writer) error {
 		checks = append(checks, doctorCheck{Name: "config", Status: "error", Detail: err.Error()})
 		return encodeDoctor(out, checks)
 	}
+	checks = append(checks, checkEmbedder(cfg))
+	checks = append(checks, checkMCPConfig(root))
+	checks = append(checks, checkAgentConfig(root))
+	checks = append(checks, checkWatcher(root))
 	if cfg.Navigation == nil || cfg.Navigation.TelemetryPath == "" {
 		checks = append(checks, doctorCheck{Name: "navigation.telemetry", Status: "warn", Detail: "telemetry_path is not configured"})
 		return encodeDoctor(out, checks)
@@ -61,6 +65,59 @@ func runDoctor(root string, out io.Writer) error {
 		checks = append(checks, doctorCheck{Name: "navigation.telemetry", Status: "ok", Detail: path})
 	}
 	return encodeDoctor(out, checks)
+}
+
+func checkEmbedder(cfg *config.Config) doctorCheck {
+	if cfg.Embedder == nil {
+		return doctorCheck{Name: "ollama.model", Status: "warn", Detail: "semantic embedding is not configured"}
+	}
+	return doctorCheck{Name: "ollama.model", Status: "ok", Detail: fmt.Sprintf("%s @ %s", cfg.Embedder.Model, cfg.Embedder.Host)}
+}
+
+func checkMCPConfig(root string) doctorCheck {
+	path := filepath.Join(root, ".mcp.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return doctorCheck{Name: "mcp.config", Status: "warn", Detail: ".mcp.json is not configured"}
+		}
+		return doctorCheck{Name: "mcp.config", Status: "error", Detail: err.Error()}
+	}
+	var cfg struct {
+		MCPServers map[string]json.RawMessage `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return doctorCheck{Name: "mcp.config", Status: "error", Detail: err.Error()}
+	}
+	if _, ok := cfg.MCPServers["scout"]; !ok {
+		return doctorCheck{Name: "mcp.config", Status: "warn", Detail: "scout server is not configured"}
+	}
+	return doctorCheck{Name: "mcp.config", Status: "ok", Detail: path}
+}
+
+func checkAgentConfig(root string) doctorCheck {
+	for _, name := range []string{"CLAUDE.md", "AGENTS.md"} {
+		path := filepath.Join(root, name)
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if strings.Contains(string(raw), "scout:start") || strings.Contains(strings.ToLower(string(raw)), "scout") {
+			return doctorCheck{Name: "client.guidance", Status: "ok", Detail: path}
+		}
+	}
+	return doctorCheck{Name: "client.guidance", Status: "warn", Detail: "no Scout client guidance file found"}
+}
+
+func checkWatcher(root string) doctorCheck {
+	raw, err := os.ReadFile(filepath.Join(root, ".mcp.json"))
+	if err != nil {
+		return doctorCheck{Name: "watcher.config", Status: "warn", Detail: "watcher state is unavailable"}
+	}
+	if strings.Contains(string(raw), `"--watch"`) {
+		return doctorCheck{Name: "watcher.config", Status: "ok", Detail: "MCP server watcher is enabled"}
+	}
+	return doctorCheck{Name: "watcher.config", Status: "warn", Detail: "MCP server watcher is not enabled"}
 }
 
 func checkRoot(root string) doctorCheck {

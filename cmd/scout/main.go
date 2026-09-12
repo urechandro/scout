@@ -20,7 +20,7 @@ Commands:
   serve    Run the MCP server over stdio
   navigation observe  Classify one structured read event from stdin
   stats    Summarize local navigation telemetry as JSON
-  doctor   Check repository, tooling, index, and telemetry health
+  doctor   Check repository, tooling, index, client, and telemetry health
   viz      Output a call graph subgraph as Graphviz DOT
 
 Run 'scout <command> --help' for command-specific flags.
