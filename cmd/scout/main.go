@@ -20,6 +20,7 @@ Commands:
   serve    Run the MCP server over stdio
   navigation observe  Classify one structured read event from stdin
   stats    Summarize local navigation telemetry as JSON
+  session-stats  Summarize Scout session telemetry as JSON
   doctor   Check repository, tooling, index, client, and telemetry health
   viz      Output a call graph subgraph as Graphviz DOT
 
@@ -52,6 +53,8 @@ func main() {
 		cmdNavigationObserve(args[1:])
 	case "stats":
 		cmdStats(args)
+	case "session-stats":
+		cmdSessionStats(args)
 	case "doctor":
 		cmdDoctor(args)
 	case "viz":

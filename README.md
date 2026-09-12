@@ -112,6 +112,7 @@ scout reindex    Incrementally reindex specific files
 scout serve      Run the MCP server over stdio
 scout navigation observe  Classify one structured read event from stdin
 scout stats      Summarize local navigation telemetry as JSON
+scout session-stats  Summarize Scout session telemetry as JSON
 scout doctor     Check repository, index, and navigation telemetry health
 ```
 
