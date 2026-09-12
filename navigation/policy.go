@@ -29,6 +29,7 @@ type Decision struct {
 	Event    ReadEvent `json:"event"`
 	Class    string    `json:"class"`
 	Proposed string    `json:"proposed"`
+	Allowed  bool      `json:"allowed"`
 	Reason   string    `json:"reason"`
 }
 
@@ -56,7 +57,7 @@ func (p Policy) withDefaults() Policy {
 // "block"; this package does not execute the proposed action.
 func (p Policy) Evaluate(event ReadEvent) Decision {
 	p = p.withDefaults()
-	d := Decision{Event: event, Proposed: "allow"}
+	d := Decision{Event: event, Proposed: "allow", Allowed: true}
 	if isExempt(event) {
 		d.Class, d.Reason = "exempt", "Scout or hook-generated operation"
 		return d
@@ -78,12 +79,14 @@ func (p Policy) Evaluate(event ReadEvent) Decision {
 		}
 		if lines > p.MaxTargetedLines {
 			d.Proposed, d.Reason = "block", "Targeted source range exceeds configured line limit"
+			d.Allowed = p.Enforcement != EnforcementBlock
 		}
 		return d
 	}
 	d.Class = "whole-source"
 	if lines > p.MaxWholeFileLines {
 		d.Proposed, d.Reason = "block", "Whole source file exceeds configured line limit"
+		d.Allowed = p.Enforcement != EnforcementBlock
 	}
 	return d
 }

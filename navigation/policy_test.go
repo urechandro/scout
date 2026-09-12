@@ -4,7 +4,21 @@ import "testing"
 
 func TestEvaluateObserveNeverBlocks(t *testing.T) {
 	d := (Policy{Enforcement: EnforcementObserve}).Evaluate(ReadEvent{File: "pkg/large.go", FileLines: 500})
-	if d.Class != "whole-source" || d.Proposed != "block" {
+	if d.Class != "whole-source" || d.Proposed != "block" || !d.Allowed {
+		t.Fatalf("unexpected decision: %+v", d)
+	}
+}
+
+func TestEvaluateBlockModeDeniesOversizedSource(t *testing.T) {
+	d := (Policy{Enforcement: EnforcementBlock}).Evaluate(ReadEvent{File: "pkg/large.go", FileLines: 500})
+	if d.Proposed != "block" || d.Allowed {
+		t.Fatalf("unexpected decision: %+v", d)
+	}
+}
+
+func TestEvaluateBlockModeKeepsExemptReadsAllowed(t *testing.T) {
+	d := (Policy{Enforcement: EnforcementBlock}).Evaluate(ReadEvent{File: "gen/api.pb.go", FileLines: 500})
+	if d.Class != "generated" || !d.Allowed {
 		t.Fatalf("unexpected decision: %+v", d)
 	}
 }
