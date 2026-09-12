@@ -43,9 +43,12 @@ navigation:
   enforcement: observe
   max_whole_file_lines: 350
   max_targeted_read_lines: 200
+  telemetry_path: .scout/navigation.jsonl
 ```
 
 Observe mode records proposed decisions but never blocks the underlying read.
+Telemetry is newline-delimited JSON with owner-only file permissions and stores
+classification metadata, not source contents.
 Generated files, assets, and Scout/MCP operations are exempt.
 
 Pass `--yes` / `-y` to skip the TUI and accept all defaults (CI-safe, semantic search off).

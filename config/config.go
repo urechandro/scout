@@ -52,6 +52,7 @@ type NavigationConfig struct {
 	Enforcement          string `yaml:"enforcement,omitempty"`
 	MaxWholeFileLines    int    `yaml:"max_whole_file_lines,omitempty"`
 	MaxTargetedReadLines int    `yaml:"max_targeted_read_lines,omitempty"`
+	TelemetryPath        string `yaml:"telemetry_path,omitempty"`
 }
 
 // EmbedderConfig points scout at an embedding service.

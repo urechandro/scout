@@ -20,7 +20,10 @@ func TestLoad_MissingFileReturnsZero(t *testing.T) {
 
 func TestSaveLoad_RoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &Config{Embedder: DefaultOllamaConfig()}
+	cfg := &Config{
+		Embedder:   DefaultOllamaConfig(),
+		Navigation: &NavigationConfig{Enforcement: "observe", MaxWholeFileLines: 350, MaxTargetedReadLines: 200, TelemetryPath: ".scout/navigation.jsonl"},
+	}
 	if err := Save(dir, cfg); err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -40,6 +43,9 @@ func TestSaveLoad_RoundTrip(t *testing.T) {
 	}
 	if got.Embedder.Model != DefaultOllamaModel {
 		t.Errorf("model: got %q", got.Embedder.Model)
+	}
+	if got.Navigation == nil || got.Navigation.TelemetryPath != ".scout/navigation.jsonl" {
+		t.Fatalf("navigation config was not preserved: %+v", got.Navigation)
 	}
 }
 
