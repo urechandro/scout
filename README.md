@@ -51,6 +51,21 @@ Telemetry is newline-delimited JSON with owner-only file permissions and stores
 classification metadata, not source contents.
 Generated files, assets, and Scout/MCP operations are exempt.
 
+Submit one structured read event from a hook or other integration:
+
+```sh
+printf '%s\n' '{"file":"pkg/auth.go","file_type":"source","file_lines":500}' \\
+  | scout navigation observe --root /your/project
+```
+
+The command emits a JSON decision with `proposed` and `allowed` fields, plus
+actionable `guidance` when a block is enforced. An explicit `"override":true`
+permits a blocked read while recording `overridden:true`. No source contents
+are read or stored by this workflow.
+
+Summarize recorded decisions with `scout stats --root /your/project`, or use
+`scout stats --path /path/to/navigation.jsonl` for an unconfigured file.
+
 Pass `--yes` / `-y` to skip the TUI and accept all defaults (CI-safe, semantic search off).
 
 ### Semantic search (optional)
@@ -95,6 +110,8 @@ scout init       Bootstrap scout in a new project (interactive TUI)
 scout index      Build or update the symbol index
 scout reindex    Incrementally reindex specific files
 scout serve      Run the MCP server over stdio
+scout navigation observe  Classify one structured read event from stdin
+scout stats      Summarize local navigation telemetry as JSON
 ```
 
 Run `scout <command> --help` for flags.
