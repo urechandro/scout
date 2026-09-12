@@ -23,6 +23,8 @@ import (
 
 const scoutStart = "<!-- scout -->"
 const scoutEnd = "<!-- /scout -->"
+const codexConfigStart = "# scout:start"
+const codexConfigEnd = "# scout:end"
 
 type agentKind string
 
@@ -201,6 +203,12 @@ func cmdInit(args []string) {
 			os.Exit(1)
 		}
 	}
+	if cfg.Agent == agentCodex {
+		if err := updateCodexConfig(absRoot, absDB, scoutBin, cfg.TSConfig, cfg.TSCommand, cfg.EnableWatch, logger); err != nil {
+			logger.Error("update Codex config", "err", err)
+			os.Exit(1)
+		}
+	}
 
 	if err := writeScoutConfig(absRoot, cfg, logger); err != nil {
 		logger.Error("write .scout/config.yaml", "err", err)
@@ -222,7 +230,11 @@ func cmdInit(args []string) {
 
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "scout init complete!")
-	fmt.Fprintln(os.Stderr, "  1. Reload Claude Code to pick up the MCP server.")
+	client := "Claude Code"
+	if cfg.Agent == agentCodex {
+		client = "Codex"
+	}
+	fmt.Fprintf(os.Stderr, "  1. Reload %s to pick up the MCP server.\n", client)
 	if cfg.ScaffoldConventions {
 		fmt.Fprintln(os.Stderr, "  2. Customize conventions.yaml with your project's patterns.")
 	}
@@ -589,6 +601,63 @@ func updateAgentGuidance(root string, agent agentKind, logger interface{ Info(st
 	}
 
 	return os.WriteFile(path, []byte(updated), 0o644)
+}
+
+// updateCodexConfig writes Scout's project-local Codex MCP entry while
+// preserving all user-authored TOML. The managed block is deliberately plain
+// TOML so this remains dependency-free and can coexist with future Codex keys.
+func updateCodexConfig(root, dbPath, scoutBin, tsconfig, tsCommand string, enableWatch bool, logger interface{ Info(string, ...any) }) error {
+	path := filepath.Join(root, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	args := []string{"serve", "--db", dbPath}
+	if enableWatch {
+		args = append(args, "--watch", root)
+	}
+	if tsconfig != "" {
+		args = append(args, "--tsconfig", tsconfig)
+		if tsCommand != "" && tsCommand != "ts-callgraph" {
+			args = append(args, "--ts-command", tsCommand)
+		}
+	}
+	var block strings.Builder
+	block.WriteString(codexConfigStart + "\n[mcp_servers.scout]\n")
+	fmt.Fprintf(&block, "command = %s\n", tomlString(scoutBin))
+	block.WriteString("args = [")
+	for i, arg := range args {
+		if i > 0 {
+			block.WriteString(", ")
+		}
+		block.WriteString(tomlString(arg))
+	}
+	block.WriteString("]\n" + codexConfigEnd)
+
+	existingBytes, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	existing := string(existingBytes)
+	start, end := strings.Index(existing, codexConfigStart), strings.Index(existing, codexConfigEnd)
+	var updated string
+	if start >= 0 && end > start {
+		updated = existing[:start] + block.String() + existing[end+len(codexConfigEnd):]
+	} else {
+		sep := ""
+		if existing != "" {
+			sep = "\n\n"
+		}
+		updated = existing + sep + block.String() + "\n"
+	}
+	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
+		return err
+	}
+	logger.Info("updated Codex MCP config", "path", path)
+	return nil
+}
+
+func tomlString(value string) string {
+	return `"` + strings.NewReplacer(`\\`, `\\\\`, `"`, `\\"`, "\n", `\\n`).Replace(value) + `"`
 }
 
 // writeScoutConfig persists .scout/config.yaml based on wizard answers.

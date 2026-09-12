@@ -22,12 +22,18 @@ scout init
 `scout init` is an interactive TUI wizard that:
 - Creates `.scout/` and adds it to `.gitignore`
 - Generates `.mcp.json` wired to `scout serve`
-- Appends a `<!-- scout -->` navigation block to `CLAUDE.md`
+- Appends a managed navigation block to `CLAUDE.md` (or `AGENTS.md` for Codex)
 - Optionally scaffolds `conventions.yaml`
 - Optionally enables semantic search via [Ollama](https://ollama.com/) — see below
 - Runs a full index
 
 Then reload Claude Code to pick up the MCP server.
+
+For Codex CLI, use `scout init --agent codex --yes`. In addition to the shared
+`.mcp.json`, this writes a managed `[mcp_servers.scout]` entry to the project
+`.codex/config.toml` and updates `AGENTS.md`. Existing Codex settings and
+unrelated instruction content are preserved. Use `--agent none` for MCP-only
+setup.
 
 Pass `--yes` / `-y` to skip the TUI and accept all defaults (CI-safe, semantic search off).
 
