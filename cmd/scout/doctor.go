@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/urechandro/scout/config"
 	"github.com/urechandro/scout/navigation"
+	_ "modernc.org/sqlite"
 )
 
 type doctorCheck struct {
@@ -30,6 +32,8 @@ func cmdDoctor(args []string) {
 
 func runDoctor(root string, out io.Writer) error {
 	checks := []doctorCheck{}
+	checks = append(checks, checkRoot(root))
+	checks = append(checks, checkDatabase(filepath.Join(root, config.Dir, "index.db")))
 	cfg, err := config.Load(root)
 	if err != nil {
 		checks = append(checks, doctorCheck{Name: "config", Status: "error", Detail: err.Error()})
@@ -55,6 +59,40 @@ func runDoctor(root string, out io.Writer) error {
 		checks = append(checks, doctorCheck{Name: "navigation.telemetry", Status: "ok", Detail: path})
 	}
 	return encodeDoctor(out, checks)
+}
+
+func checkRoot(root string) doctorCheck {
+	info, err := os.Stat(root)
+	if err != nil {
+		return doctorCheck{Name: "repository.root", Status: "error", Detail: err.Error()}
+	}
+	if !info.IsDir() {
+		return doctorCheck{Name: "repository.root", Status: "error", Detail: "path is not a directory"}
+	}
+	return doctorCheck{Name: "repository.root", Status: "ok", Detail: root}
+}
+
+func checkDatabase(path string) doctorCheck {
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return doctorCheck{Name: "database.schema", Status: "warn", Detail: "index database does not exist"}
+		}
+		return doctorCheck{Name: "database.schema", Status: "error", Detail: err.Error()}
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		return doctorCheck{Name: "database.schema", Status: "error", Detail: err.Error()}
+	}
+	defer db.Close()
+	const query = `SELECT count(*) FROM sqlite_master WHERE type IN ('table', 'view') AND name IN (?, ?, ?, ?, ?, ?)`
+	var count int
+	if err := db.QueryRow(query, "symbols", "edges", "index_meta", "conventions", "symbols_fts", "conventions_fts").Scan(&count); err != nil {
+		return doctorCheck{Name: "database.schema", Status: "error", Detail: err.Error()}
+	}
+	if count != 6 {
+		return doctorCheck{Name: "database.schema", Status: "error", Detail: fmt.Sprintf("expected 6 schema objects, found %d", count)}
+	}
+	return doctorCheck{Name: "database.schema", Status: "ok", Detail: path}
 }
 
 func encodeDoctor(out io.Writer, checks []doctorCheck) error {
