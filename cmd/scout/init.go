@@ -24,6 +24,14 @@ import (
 const scoutStart = "<!-- scout -->"
 const scoutEnd = "<!-- /scout -->"
 
+type agentKind string
+
+const (
+	agentClaude agentKind = "claude"
+	agentCodex  agentKind = "codex"
+	agentNone   agentKind = "none"
+)
+
 const claudeMDBlock = scoutStart + `
 ## Code Navigation — Use Scout Tools
 
@@ -42,6 +50,14 @@ Do NOT use grep, find, or the Read tool to explore the codebase.
 - Never use grep, find, or Read to navigate code.
 - Never read a file to understand a symbol — call get_body instead.
 - Never search for callers with grep — call get_callers instead.
+` + scoutEnd
+
+const codexAgentsBlock = scoutStart + `
+## Scout navigation
+
+Use Scout MCP tools for code navigation. Start discovery with
+get_relevant_context, fetch implementations with get_body, inspect control
+flow with get_flow, and check blast radius with get_impact before changes.
 ` + scoutEnd
 
 const conventionsStarter = `# conventions.yaml — Architectural pattern registry for scout
@@ -91,6 +107,7 @@ type wizardConfig struct {
 	EnableSemantic bool
 	OllamaHost     string
 	OllamaModel    string
+	Agent          agentKind
 }
 
 type mcpServer struct {
@@ -113,6 +130,7 @@ func cmdInit(args []string) {
 	excludeFlag := fs.String("exclude", "", "Comma-separated package path substrings to skip.")
 	skipIndexFlag := fs.Bool("skip-index", false, "Write config files only; skip running the indexer.")
 	yes := fs.Bool("yes", false, "Non-interactive: accept all defaults (CI-safe).")
+	agentFlag := fs.String("agent", string(agentClaude), "Client guidance to render: claude, codex, or none.")
 	fs.BoolVar(yes, "y", false, "Alias for --yes.")
 	_ = fs.Parse(args)
 
@@ -128,6 +146,11 @@ func cmdInit(args []string) {
 	conventionsExist := checkConventionsExist(absRoot)
 
 	cfg := buildInitDefaults(absRoot, *dbFlag, *tsconfigFlag, *tsCommandFlag, *excludeFlag, *skipIndexFlag, detected, conventionsExist)
+	cfg.Agent = agentKind(*agentFlag)
+	if cfg.Agent != agentClaude && cfg.Agent != agentCodex && cfg.Agent != agentNone {
+		logger.Error("invalid agent", "agent", *agentFlag)
+		os.Exit(1)
+	}
 
 	if shouldRunTUI(*yes) {
 		if err := runWizard(&cfg, conventionsExist); err != nil {
@@ -172,9 +195,11 @@ func cmdInit(args []string) {
 		os.Exit(1)
 	}
 
-	if err := updateCLAUDEMD(absRoot, logger); err != nil {
-		logger.Error("update CLAUDE.md", "err", err)
-		os.Exit(1)
+	if cfg.Agent != agentNone {
+		if err := updateAgentGuidance(absRoot, cfg.Agent, logger); err != nil {
+			logger.Error("update agent guidance", "err", err)
+			os.Exit(1)
+		}
 	}
 
 	if err := writeScoutConfig(absRoot, cfg, logger); err != nil {
@@ -359,7 +384,10 @@ func printInitSummary(cfg wizardConfig) {
 	fmt.Fprintln(os.Stderr)
 }
 
-func ensureGitignore(root string, logger interface{ Info(string, ...any); Warn(string, ...any) }) error {
+func ensureGitignore(root string, logger interface {
+	Info(string, ...any)
+	Warn(string, ...any)
+}) error {
 	path := filepath.Join(root, ".gitignore")
 	entry := ".scout/"
 
@@ -472,7 +500,10 @@ func resolveBin(name string) string {
 	return filepath.Join(home, "go", "bin", name)
 }
 
-func writeInitMCPJSON(root, dbPath, scoutBin, tsconfig, tsCommand string, enableWatch bool, logger interface{ Warn(string, ...any); Info(string, ...any) }) error {
+func writeInitMCPJSON(root, dbPath, scoutBin, tsconfig, tsCommand string, enableWatch bool, logger interface {
+	Warn(string, ...any)
+	Info(string, ...any)
+}) error {
 	mcpPath := filepath.Join(root, ".mcp.json")
 
 	cfg := mcpFile{MCPServers: map[string]json.RawMessage{}}
@@ -521,9 +552,17 @@ func writeInitMCPJSON(root, dbPath, scoutBin, tsconfig, tsCommand string, enable
 }
 
 func updateCLAUDEMD(root string, logger interface{ Info(string, ...any) }) error {
-	claudePath := filepath.Join(root, "CLAUDE.md")
+	return updateAgentGuidance(root, agentClaude, logger)
+}
 
-	existing, err := os.ReadFile(claudePath)
+func updateAgentGuidance(root string, agent agentKind, logger interface{ Info(string, ...any) }) error {
+	path := filepath.Join(root, "CLAUDE.md")
+	block := claudeMDBlock
+	if agent == agentCodex {
+		path = filepath.Join(root, "AGENTS.md")
+		block = codexAgentsBlock
+	}
+	existing, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -534,8 +573,8 @@ func updateCLAUDEMD(root string, logger interface{ Info(string, ...any) }) error
 
 	var updated string
 	if startIdx >= 0 && endIdx >= 0 && endIdx > startIdx {
-		updated = content[:startIdx] + claudeMDBlock + content[endIdx+len(scoutEnd):]
-		logger.Info("replaced existing scout block in CLAUDE.md")
+		updated = content[:startIdx] + block + content[endIdx+len(scoutEnd):]
+		logger.Info("replaced existing scout block", "path", path)
 	} else {
 		sep := ""
 		if len(content) > 0 && !strings.HasSuffix(content, "\n\n") {
@@ -545,11 +584,11 @@ func updateCLAUDEMD(root string, logger interface{ Info(string, ...any) }) error
 				sep = "\n\n"
 			}
 		}
-		updated = content + sep + claudeMDBlock + "\n"
-		logger.Info("appended scout block to CLAUDE.md")
+		updated = content + sep + block + "\n"
+		logger.Info("appended scout block", "path", path)
 	}
 
-	return os.WriteFile(claudePath, []byte(updated), 0o644)
+	return os.WriteFile(path, []byte(updated), 0o644)
 }
 
 // writeScoutConfig persists .scout/config.yaml based on wizard answers.
@@ -620,7 +659,10 @@ func scaffoldConventions(root string, logger interface{ Info(string, ...any) }) 
 }
 
 // runInitIndex execs "scout index" to run the full index with --deps.
-func runInitIndex(root, dbPath, tsconfig, tsCommand, exclude, method string, logger interface{ Info(string, ...any); Error(string, ...any) }) error {
+func runInitIndex(root, dbPath, tsconfig, tsCommand, exclude, method string, logger interface {
+	Info(string, ...any)
+	Error(string, ...any)
+}) error {
 	scoutBin := resolveBin("scout")
 
 	args := []string{"index", "--db", dbPath, "--root", root, "--deps", "--method", method}

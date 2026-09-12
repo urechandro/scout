@@ -270,6 +270,11 @@ without introducing an unnecessary plugin framework.
 - Unrelated client configuration and instruction content are preserved.
 - Retrieval and indexing contain no Codex-specific assumptions.
 
+Implementation note (2026-09-12): `scout init --agent claude|codex|none` now
+selects shared repository setup with client-specific guidance rendering. Claude
+remains the default, Codex guidance is managed in `AGENTS.md`, and `none`
+performs MCP/config setup without writing client instruction files.
+
 ## Milestone 3: Codex MCP integration
 
 Goal: determine whether reliable tools plus instructions are sufficient before
