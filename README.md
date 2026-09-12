@@ -124,6 +124,10 @@ and optional navigation telemetry. Missing optional state is reported as a
 warning; unreadable or malformed state is reported as an error. Checks are
 offline and do not contact Ollama or client processes.
 
+Applications embedding Scout can opt into session telemetry with the
+`telemetry` package. It appends one JSON object per call and summarizes
+success, failure, response bytes, and estimated tokens for local benchmarks.
+
 ---
 
 ## Manual setup
