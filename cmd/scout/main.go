@@ -20,6 +20,7 @@ Commands:
   serve    Run the MCP server over stdio
   navigation observe  Classify one structured read event from stdin
   stats    Summarize local navigation telemetry as JSON
+  doctor   Check navigation telemetry configuration and health
   viz      Output a call graph subgraph as Graphviz DOT
 
 Run 'scout <command> --help' for command-specific flags.
@@ -51,6 +52,8 @@ func main() {
 		cmdNavigationObserve(args[1:])
 	case "stats":
 		cmdStats(args)
+	case "doctor":
+		cmdDoctor(args)
 	case "viz":
 		cmdViz(args)
 	case "help", "--help", "-h":
