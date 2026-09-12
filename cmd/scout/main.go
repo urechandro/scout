@@ -19,6 +19,7 @@ Commands:
   reindex  Incrementally reindex specific files
   serve    Run the MCP server over stdio
   navigation observe  Classify one structured read event from stdin
+  stats    Summarize local navigation telemetry as JSON
   viz      Output a call graph subgraph as Graphviz DOT
 
 Run 'scout <command> --help' for command-specific flags.
@@ -48,6 +49,8 @@ func main() {
 			os.Exit(2)
 		}
 		cmdNavigationObserve(args[1:])
+	case "stats":
+		cmdStats(args)
 	case "viz":
 		cmdViz(args)
 	case "help", "--help", "-h":
