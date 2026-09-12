@@ -112,9 +112,15 @@ scout reindex    Incrementally reindex specific files
 scout serve      Run the MCP server over stdio
 scout navigation observe  Classify one structured read event from stdin
 scout stats      Summarize local navigation telemetry as JSON
+scout doctor     Check repository, index, and navigation telemetry health
 ```
 
 Run `scout <command> --help` for flags.
+
+`scout doctor --root /your/project` emits machine-readable JSON checks for the
+repository root, the conventional `.scout/index.db` schema, and optional
+navigation telemetry. Missing optional telemetry is reported as a warning;
+unreadable or malformed state is reported as an error.
 
 ---
 
