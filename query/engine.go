@@ -404,6 +404,9 @@ func (e *Engine) phaseThreeVectorSearch(task string, scored map[string]*SymbolSu
 		return
 	}
 	queryVec := vecs[0]
+	if !validVector(queryVec) {
+		return
+	}
 
 	slab, slabDim, err := e.getOrLoadSlab(model)
 	if err != nil || len(slab) == 0 {
@@ -460,7 +463,7 @@ func (e *Engine) getOrLoadSlab(model string) ([]slabRow, int, error) {
 	slab := make([]slabRow, 0, len(rows))
 	dim := 0
 	for _, r := range rows {
-		if len(r.Vector) == 0 {
+		if !validVector(r.Vector) {
 			continue
 		}
 		if dim == 0 {
@@ -472,7 +475,10 @@ func (e *Engine) getOrLoadSlab(model string) ([]slabRow, int, error) {
 			// rewrite it consistently.
 			continue
 		}
-		slab = append(slab, slabRow{id: r.ID, vec: r.Vector})
+		// Keep the slab independent of store-owned buffers so a concurrent
+		// refresh cannot mutate vectors while cosine scoring is in progress.
+		vec := append([]float32(nil), r.Vector...)
+		slab = append(slab, slabRow{id: r.ID, vec: vec})
 	}
 	e.slab = slab
 	e.slabModel = model
@@ -482,6 +488,21 @@ func (e *Engine) getOrLoadSlab(model string) ([]slabRow, int, error) {
 	// dim mismatch persists across the reload.
 	e.loggedDimSkew.Store(false)
 	return e.slab, e.slabDim, nil
+}
+
+// validVector rejects malformed persisted or returned embeddings before they
+// reach cosine scoring. NaN/Inf values otherwise poison scores and can make
+// heap ordering nondeterministic.
+func validVector(v []float32) bool {
+	if len(v) == 0 {
+		return false
+	}
+	for _, x := range v {
+		if math.IsNaN(float64(x)) || math.IsInf(float64(x), 0) {
+			return false
+		}
+	}
+	return true
 }
 
 // vectorHit is one row of the top-K cosine result.

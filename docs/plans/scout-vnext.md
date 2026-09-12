@@ -180,6 +180,14 @@ Add or complete tests for:
 All vector failures must preserve deterministic exact/FTS behavior. Model and
 dimension problems must be visible in diagnostics.
 
+Implementation note (2026-09-12): query embedding failures and timeouts remain
+silent no-ops, while malformed NaN/Inf vectors are rejected before cosine
+scoring. Slab rows are copied on load to isolate concurrent refreshes from
+scoring. Coverage includes unavailable embedders, empty slabs, dimension
+mismatches, dirty-slab reloads, malformed vectors, and timeout behavior. The
+remaining concurrency and large-repository cases are tracked as follow-up
+fixtures before Gate B is declared complete.
+
 ### 1.4 Add retrieval explanations
 
 Add a structured internal trace and expose it through one of:
