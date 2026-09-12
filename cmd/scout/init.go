@@ -23,6 +23,8 @@ import (
 
 const scoutStart = "<!-- scout -->"
 const scoutEnd = "<!-- /scout -->"
+const legacyScoutStart = "<!-- scout:start -->"
+const legacyScoutEnd = "<!-- scout:end -->"
 const codexConfigStart = "# scout:start"
 const codexConfigEnd = "# scout:end"
 
@@ -580,12 +582,18 @@ func updateAgentGuidance(root string, agent agentKind, logger interface{ Info(st
 	}
 	content := string(existing)
 
-	startIdx := strings.Index(content, scoutStart)
-	endIdx := strings.Index(content, scoutEnd)
+	startMarker, endMarker := scoutStart, scoutEnd
+	startIdx := strings.Index(content, startMarker)
+	endIdx := strings.Index(content, endMarker)
+	if startIdx < 0 || endIdx <= startIdx {
+		startMarker, endMarker = legacyScoutStart, legacyScoutEnd
+		startIdx = strings.Index(content, startMarker)
+		endIdx = strings.Index(content, endMarker)
+	}
 
 	var updated string
 	if startIdx >= 0 && endIdx >= 0 && endIdx > startIdx {
-		updated = content[:startIdx] + block + content[endIdx+len(scoutEnd):]
+		updated = content[:startIdx] + block + content[endIdx+len(endMarker):]
 		logger.Info("replaced existing scout block", "path", path)
 	} else {
 		sep := ""
