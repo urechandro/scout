@@ -209,6 +209,11 @@ or a debug-only MCP response mode. The trace should report:
 
 Normal MCP output must remain compact.
 
+Implementation note (2026-09-12): `query.ContextRequest.Explain` and the MCP
+`explain` argument now expose an opt-in `RetrievalTrace` with query class,
+budget, per-phase candidate counts, expansion, trimming, and latency. Brief
+responses remain unchanged unless explanations are requested.
+
 ### Gate B: retrieval trustworthy
 
 - Precise-query regression count is zero.

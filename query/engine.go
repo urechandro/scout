@@ -31,6 +31,8 @@ type ContextRequest struct {
 	// Verbose includes docstrings, why, and score in results. Default (false)
 	// returns compact pointers: id, kind, signature, file:line.
 	Verbose bool
+	// Explain includes retrieval diagnostics in the response.
+	Explain bool
 }
 
 // SymbolSummary is a trimmed view of a symbol returned to the model.
@@ -56,9 +58,24 @@ type PackageHit struct {
 
 // ContextResponse is returned by GetRelevantContext.
 type ContextResponse struct {
-	Packages  []PackageHit    `json:"packages,omitempty"`
-	Symbols   []SymbolSummary `json:"symbols"`
-	Truncated int             `json:"truncated"`
+	Packages    []PackageHit    `json:"packages,omitempty"`
+	Symbols     []SymbolSummary `json:"symbols"`
+	Truncated   int             `json:"truncated"`
+	Explanation *RetrievalTrace `json:"explanation,omitempty"`
+}
+
+// RetrievalTrace describes retrieval stages for one explained query.
+type RetrievalTrace struct {
+	QueryClass                string `json:"query_class"`
+	BudgetTokens              int    `json:"budget_tokens"`
+	ExactCandidates           int    `json:"exact_candidates"`
+	FTSCandidates             int    `json:"fts_candidates"`
+	VectorCandidates          int    `json:"vector_candidates"`
+	CandidatesBeforeExpansion int    `json:"candidates_before_expansion"`
+	CandidatesAfterExpansion  int    `json:"candidates_after_expansion"`
+	Returned                  int    `json:"returned"`
+	Truncated                 int    `json:"truncated"`
+	LatencyMillis             int64  `json:"latency_ms"`
 }
 
 // Options configures optional Engine behavior.
@@ -171,7 +188,16 @@ func classifyQuery(task string) queryType {
 
 // GetRelevantContext is the primary MCP tool entry point.
 func (e *Engine) GetRelevantContext(req ContextRequest) (*ContextResponse, error) {
+	started := time.Now()
 	qtype := classifyQuery(req.Task)
+	var trace *RetrievalTrace
+	if req.Explain {
+		class := "discovery"
+		if qtype == queryPrecise {
+			class = "precise"
+		}
+		trace = &RetrievalTrace{QueryClass: class}
+	}
 
 	if req.BudgetTokens == 0 {
 		switch qtype {
@@ -183,6 +209,9 @@ func (e *Engine) GetRelevantContext(req ContextRequest) (*ContextResponse, error
 	}
 	if req.MaxExpansionDepth == 0 {
 		req.MaxExpansionDepth = 1
+	}
+	if trace != nil {
+		trace.BudgetTokens = req.BudgetTokens
 	}
 
 	scored := make(map[string]*SymbolSummary)
@@ -246,6 +275,10 @@ func (e *Engine) GetRelevantContext(req ContextRequest) (*ContextResponse, error
 				scored[sym.ID] = &s
 			}
 		}
+	}
+
+	if trace != nil {
+		trace.ExactCandidates = len(scored)
 	}
 
 	// For precise queries, skip FTS entirely. When Phase 1 found hits we
@@ -317,6 +350,10 @@ func (e *Engine) GetRelevantContext(req ContextRequest) (*ContextResponse, error
 		}
 	}
 
+	if trace != nil {
+		trace.FTSCandidates = len(scored)
+	}
+
 	// Phase 3: vector cosine. Discovery queries only — precise queries are
 	// deterministic by design, and fuzzy semantic matches would add noise
 	// without value. Silently no-ops when no embedder is configured, when
@@ -325,8 +362,14 @@ func (e *Engine) GetRelevantContext(req ContextRequest) (*ContextResponse, error
 	if !skipFTS && e.embedder != nil {
 		e.phaseThreeVectorSearch(req.Task, scored)
 	}
+	if trace != nil {
+		trace.VectorCandidates = len(scored) - trace.FTSCandidates
+	}
 
 	scored = dedup(scored)
+	if trace != nil {
+		trace.CandidatesBeforeExpansion = len(scored)
+	}
 
 	if req.MaxExpansionDepth > 0 {
 		expanded, err := e.expand(scored, req.MaxExpansionDepth)
@@ -340,6 +383,9 @@ func (e *Engine) GetRelevantContext(req ContextRequest) (*ContextResponse, error
 		}
 	}
 
+	if trace != nil {
+		trace.CandidatesAfterExpansion = len(scored)
+	}
 	ranked := rankSymbols(scored)
 	ranked = prioritizeSource(ranked)
 	// Elide before trimming so the budget is charged for what actually
@@ -356,11 +402,17 @@ func (e *Engine) GetRelevantContext(req ContextRequest) (*ContextResponse, error
 			kept[i].Score = 0
 		}
 	}
+	if trace != nil {
+		trace.Returned = len(kept)
+		trace.Truncated = truncated
+		trace.LatencyMillis = time.Since(started).Milliseconds()
+	}
 
 	return &ContextResponse{
-		Packages:  buildPackageSummary(kept),
-		Symbols:   kept,
-		Truncated: truncated,
+		Packages:    buildPackageSummary(kept),
+		Symbols:     kept,
+		Truncated:   truncated,
+		Explanation: trace,
 	}, nil
 }
 

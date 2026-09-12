@@ -86,6 +86,23 @@ func TestPhaseThree_PreciseQuerySkipsEmbedder(t *testing.T) {
 	}
 }
 
+func TestRetrievalExplanationIsOptIn(t *testing.T) {
+	s := newTestStore(t)
+	seedSymbols(t, s, []store.Symbol{{ID: "pkg.ValidateThing", Package: "pkg", Name: "ValidateThing", Kind: "func", Signature: "func ValidateThing()", File: "/v.go", LineStart: 1, LineEnd: 2}})
+	engine := New(s, Options{})
+	plain, err := engine.GetRelevantContext(ContextRequest{Task: "ValidateThing"})
+	if err != nil || plain.Explanation != nil {
+		t.Fatalf("normal response unexpectedly explained: %#v (%v)", plain.Explanation, err)
+	}
+	resp, err := engine.GetRelevantContext(ContextRequest{Task: "ValidateThing", Explain: true})
+	if err != nil {
+		t.Fatalf("explained query: %v", err)
+	}
+	if resp.Explanation == nil || resp.Explanation.QueryClass != "precise" || resp.Explanation.Returned != len(resp.Symbols) {
+		t.Fatalf("bad retrieval trace: %#v", resp.Explanation)
+	}
+}
+
 func TestPhaseThree_PreciseDottedQuerySkipsEmbedder(t *testing.T) {
 	s := newTestStore(t)
 	fake := &fakeEmbedder{model: "test", fallback: []float32{1, 0, 0}}

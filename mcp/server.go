@@ -566,6 +566,7 @@ func (s *Server) callGetRelevantContext(args json.RawMessage) (any, error) {
 		BudgetTokens int    `json:"budget_tokens"`
 		MaxDepth     int    `json:"max_depth"`
 		Verbose      bool   `json:"verbose"`
+		Explain      bool   `json:"explain"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return nil, fmt.Errorf("invalid arguments: %w", err)
@@ -590,6 +591,7 @@ func (s *Server) callGetRelevantContext(args json.RawMessage) (any, error) {
 		BudgetTokens:      params.BudgetTokens,
 		MaxExpansionDepth: depth,
 		Verbose:           params.Verbose,
+		Explain:           params.Explain,
 	})
 	if err != nil {
 		return nil, err
@@ -597,7 +599,7 @@ func (s *Server) callGetRelevantContext(args json.RawMessage) (any, error) {
 	// Brief mode renders as plain text: one line per symbol. JSON's repeated
 	// keys and quoting add ~40% overhead on pointer-shaped payloads and the
 	// model parses aligned text lines just as reliably.
-	if !params.Verbose {
+	if !params.Verbose && !params.Explain {
 		return renderContextText(resp), nil
 	}
 	return resp, nil
