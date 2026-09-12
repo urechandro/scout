@@ -3,9 +3,11 @@ package query
 import (
 	"context"
 	"errors"
+	"math"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/urechandro/scout/store"
 )
@@ -250,6 +252,46 @@ func TestPhaseThree_DimMismatchIsSilentNoop(t *testing.T) {
 	}
 	if gotIDs[hitID] {
 		t.Errorf("dim-mismatched vector hit %q leaked through phase-3", hitID)
+	}
+}
+
+func TestPhaseThree_MalformedVectorsAreIgnored(t *testing.T) {
+	s := newTestStore(t)
+	badID := "myapp/bad.NaNVector"
+	goodID := "myapp/good.ValidVector"
+	seedSymbols(t, s, []store.Symbol{
+		{ID: badID, Package: "myapp/bad", Name: "NaNVector", Kind: "func", Signature: "func NaNVector()", File: "/bad.go", LineStart: 1, LineEnd: 2},
+		{ID: goodID, Package: "myapp/good", Name: "ValidVector", Kind: "func", Signature: "func ValidVector()", File: "/good.go", LineStart: 1, LineEnd: 2},
+	})
+	seedEmbedding(t, s, badID, "test", []float32{float32(math.NaN()), 0})
+	seedEmbedding(t, s, goodID, "test", []float32{1, 0})
+	fake := &fakeEmbedder{model: "test", fallback: []float32{1, 0}}
+	engine := New(s, Options{Embedder: fake})
+	resp, err := engine.GetRelevantContext(ContextRequest{Task: "unrelated semantic concept"})
+	if err != nil {
+		t.Fatalf("GetRelevantContext: %v", err)
+	}
+	for _, sym := range resp.Symbols {
+		if sym.ID == badID {
+			t.Fatalf("malformed vector surfaced as a semantic hit")
+		}
+	}
+}
+
+type blockingEmbedder struct{ model string }
+
+func (b blockingEmbedder) Model() string { return b.model }
+func (b blockingEmbedder) Embed(ctx context.Context, _ []string) ([][]float32, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestPhaseThree_EmbedderTimeoutIsSilentNoop(t *testing.T) {
+	s := newTestStore(t)
+	engine := New(s, Options{Embedder: blockingEmbedder{model: "test"}, PhaseThreeTimeout: time.Millisecond})
+	resp, err := engine.GetRelevantContext(ContextRequest{Task: "discover something"})
+	if err != nil || resp == nil {
+		t.Fatalf("timeout should preserve a valid response: resp=%v err=%v", resp, err)
 	}
 }
 
