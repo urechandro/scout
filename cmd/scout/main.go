@@ -18,6 +18,7 @@ Commands:
   index    Build or update the symbol index
   reindex  Incrementally reindex specific files
   serve    Run the MCP server over stdio
+  navigation observe  Classify one structured read event from stdin
   viz      Output a call graph subgraph as Graphviz DOT
 
 Run 'scout <command> --help' for command-specific flags.
@@ -41,6 +42,12 @@ func main() {
 		cmdReindex(args)
 	case "serve":
 		cmdServe(args)
+	case "navigation":
+		if len(args) == 0 || args[0] != "observe" {
+			fmt.Fprintln(os.Stderr, "scout navigation: expected subcommand observe")
+			os.Exit(2)
+		}
+		cmdNavigationObserve(args[1:])
 	case "viz":
 		cmdViz(args)
 	case "help", "--help", "-h":
