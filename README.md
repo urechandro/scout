@@ -138,6 +138,9 @@ Compare runs using the same task set and report total calls, failures, response
 bytes, and estimated tokens; keep semantic retrieval and Ollama disabled unless
 the benchmark explicitly measures them.
 
+See [the controlled benchmark procedure](docs/benchmarks/scout-vnext.md) for
+the fixed task-set and acceptance criteria.
+
 ---
 
 ## Manual setup
