@@ -12,6 +12,7 @@ const (
 	EnforcementBlock   = "block"
 	DefaultWholeLines  = 350
 	DefaultTargetLines = 200
+	BlockGuidance      = "Broad source read blocked by Scout. Use get_relevant_context for discovery, then get_body or get_flow for exact symbols. A targeted source range remains available for editing context."
 )
 
 // ReadEvent is the structured representation of one attempted file read.
@@ -31,6 +32,7 @@ type Decision struct {
 	Proposed string    `json:"proposed"`
 	Allowed  bool      `json:"allowed"`
 	Reason   string    `json:"reason"`
+	Guidance string    `json:"guidance,omitempty"`
 }
 
 // Policy is a read classifier configuration.
@@ -80,6 +82,7 @@ func (p Policy) Evaluate(event ReadEvent) Decision {
 		if lines > p.MaxTargetedLines {
 			d.Proposed, d.Reason = "block", "Targeted source range exceeds configured line limit"
 			d.Allowed = p.Enforcement != EnforcementBlock
+			d.setGuidance()
 		}
 		return d
 	}
@@ -87,8 +90,15 @@ func (p Policy) Evaluate(event ReadEvent) Decision {
 	if lines > p.MaxWholeFileLines {
 		d.Proposed, d.Reason = "block", "Whole source file exceeds configured line limit"
 		d.Allowed = p.Enforcement != EnforcementBlock
+		d.setGuidance()
 	}
 	return d
+}
+
+func (d *Decision) setGuidance() {
+	if !d.Allowed {
+		d.Guidance = BlockGuidance
+	}
 }
 
 func isExempt(e ReadEvent) bool {

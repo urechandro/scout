@@ -11,8 +11,15 @@ func TestEvaluateObserveNeverBlocks(t *testing.T) {
 
 func TestEvaluateBlockModeDeniesOversizedSource(t *testing.T) {
 	d := (Policy{Enforcement: EnforcementBlock}).Evaluate(ReadEvent{File: "pkg/large.go", FileLines: 500})
-	if d.Proposed != "block" || d.Allowed {
+	if d.Proposed != "block" || d.Allowed || d.Guidance != BlockGuidance {
 		t.Fatalf("unexpected decision: %+v", d)
+	}
+}
+
+func TestEvaluateObserveModeOmitsBlockingGuidance(t *testing.T) {
+	d := (Policy{Enforcement: EnforcementObserve}).Evaluate(ReadEvent{File: "pkg/large.go", FileLines: 500})
+	if d.Guidance != "" {
+		t.Fatalf("guidance = %q, want empty", d.Guidance)
 	}
 }
 
